@@ -26,5 +26,6 @@ Estos pasos se completan de forma progresiva a lo largo de la Unidad U1.2, no to
 - Cada proyecto nuevo tiene su propio entorno virtual: no se comparten dependencias entre proyectos distintos.
 - Todo el trabajo que se entrega en este programa vive en un repositorio de GitHub, sin excepción.
 
+!["Evidencia de petición autenticada de Postman"](docs/Evidencia_peticion_evidencia_autenticada_postman.png)
 
-![alt text](<Captura de pantalla 2026-10-14 164815.png>)
+!["Evidencia de petición autenticada en Thunder Client"](docs/Evidencia_peticion_autenticada_Thunder_Client.png)
