@@ -1,27 +1,22 @@
-# consumir_openrouter.py
-
 import os
 import requests
 from dotenv import load_dotenv
 
-# Cargar las variables de entorno
 load_dotenv()
 
-def obtener_dato_de_prueba(pregunta):
-    # Obtener la API key
-    api_key = os.getenv("OPENROUTER_API_KEY")
 
-    # Configurar el modelo y la URL
+def armar_peticion(pregunta):
+    """Prepara la solicitud para la API de OpenRouter."""
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
     modelo = "openai/gpt-4o-mini"
     url = "https://openrouter.ai/api/v1/chat/completions"
 
-    # Configurar las cabeceras
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
-    # Preparar el cuerpo de la solicitud
     body = {
         "model": modelo,
         "messages": [
@@ -32,7 +27,12 @@ def obtener_dato_de_prueba(pregunta):
         ]
     }
 
-    # Enviar la solicitud a OpenRouter
+    return url, headers, body
+
+
+def enviar_peticion(url, headers, body):
+    """Envía la solicitud a OpenRouter y devuelve la respuesta JSON."""
+
     respuesta = requests.post(
         url,
         headers=headers,
@@ -40,17 +40,29 @@ def obtener_dato_de_prueba(pregunta):
         timeout=60
     )
 
-    # Comprobar si hubo un error HTTP
     respuesta.raise_for_status()
 
-    # Convertir la respuesta a un diccionario Python
-    datos = respuesta.json()
+    return respuesta.json()
 
-    # Extraer el texto generado por el modelo
+
+def extraer_texto(datos):
+    """Extrae el texto generado por el modelo."""
+
     return datos["choices"][0]["message"]["content"]
+
+
+def obtener_dato_de_prueba(pregunta):
+    """Coordina el proceso de consulta a OpenRouter."""
+
+    url, headers, body = armar_peticion(pregunta)
+    datos = enviar_peticion(url, headers, body)
+
+    return extraer_texto(datos)
 
 
 if __name__ == "__main__":
     pregunta = "¿Qué es la inteligencia artificial? Explícalo brevemente."
+
     resultado = obtener_dato_de_prueba(pregunta)
+
     print(resultado)
