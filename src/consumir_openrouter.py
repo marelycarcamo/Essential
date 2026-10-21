@@ -6,9 +6,16 @@ load_dotenv()
 
 
 def armar_peticion(pregunta):
-    """Prepara la solicitud para la API de OpenRouter."""
+    """Valida la pregunta y prepara la solicitud a OpenRouter."""
+
+    if not pregunta or not pregunta.strip():
+        raise ValueError("La pregunta no puede estar vacía.")
 
     api_key = os.getenv("OPENROUTER_API_KEY")
+
+    if not api_key:
+        raise RuntimeError("No se encontró la API key de OpenRouter.")
+
     modelo = "openai/gpt-4o-mini"
     url = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -31,28 +38,60 @@ def armar_peticion(pregunta):
 
 
 def enviar_peticion(url, headers, body):
-    """Envía la solicitud a OpenRouter y devuelve la respuesta JSON."""
+    """Envía la solicitud y devuelve la respuesta en formato JSON."""
 
-    respuesta = requests.post(
-        url,
-        headers=headers,
-        json=body,
-        timeout=60
-    )
+    try:
+        respuesta = requests.post(
+            url,
+            headers=headers,
+            json=body,
+            timeout=60
+        )
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            "No se pudo conectar con OpenRouter. "
+            "Intenta de nuevo en unos segundos."
+        ) from None
+    except requests.exceptions.Timeout:
+        raise RuntimeError(
+            "OpenRouter tardó demasiado en responder."
+        ) from None
 
-    respuesta.raise_for_status()
+    if not respuesta.ok:
+        raise RuntimeError(
+            f"OpenRouter devolvió el error HTTP {respuesta.status_code}."
+        )
 
-    return respuesta.json()
+    try:
+        return respuesta.json()
+    except requests.exceptions.JSONDecodeError:
+        raise RuntimeError(
+            "La respuesta del servicio no llegó en el formato esperado."
+        ) from None
 
 
 def extraer_texto(datos):
     """Extrae el texto generado por el modelo."""
 
-    return datos["choices"][0]["message"]["content"]
+    try:
+        texto = datos["choices"][0]["message"]["content"]
+
+        if not isinstance(texto, str) or not texto.strip():
+            raise RuntimeError(
+                "La respuesta del servicio no contiene texto generado."
+            )
+
+        return texto
+
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError(
+            "La respuesta no trae el texto generado "
+            "en el lugar esperado."
+        ) from None
 
 
 def obtener_dato_de_prueba(pregunta):
-    """Coordina el proceso de consulta a OpenRouter."""
+    """Coordina la consulta a OpenRouter."""
 
     url, headers, body = armar_peticion(pregunta)
     datos = enviar_peticion(url, headers, body)
@@ -61,8 +100,11 @@ def obtener_dato_de_prueba(pregunta):
 
 
 if __name__ == "__main__":
-    pregunta = "¿Qué es la inteligencia artificial? Explícalo brevemente."
+    pregunta = "¿Qué es la inteligencia artificial?"
 
-    resultado = obtener_dato_de_prueba(pregunta)
+    try:
+        resultado = obtener_dato_de_prueba(pregunta)
+        print(resultado)
 
-    print(resultado)
+    except (ValueError, RuntimeError) as error:
+        print("No se pudo completar la operación:", error)
