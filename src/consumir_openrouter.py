@@ -99,6 +99,18 @@ def obtener_dato_de_prueba(pregunta):
     return extraer_texto(datos)
 
 
+def calcular_costo(datos, precio_entrada, precio_salida):
+    uso = datos["usage"]
+
+    tokens_entrada = uso["prompt_tokens"]
+    tokens_salida = uso["completion_tokens"]
+
+    return (
+        tokens_entrada * precio_entrada
+        + tokens_salida * precio_salida
+    )
+
+
 if __name__ == "__main__":
     pregunta = "¿Qué es la inteligencia artificial?"
 
