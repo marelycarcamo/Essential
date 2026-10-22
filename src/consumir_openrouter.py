@@ -16,8 +16,8 @@ def armar_peticion(pregunta):
     if not api_key:
         raise RuntimeError("No se encontró la API key de OpenRouter.")
 
-    modelo = "openai/gpt-4o-mini"
-    url = "https://openrouter.ai/api/v1/chat/completions"
+    modelo = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+    url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
 
     headers = {
         "Authorization": f"Bearer {api_key}",
