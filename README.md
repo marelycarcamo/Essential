@@ -227,20 +227,22 @@ Sin embargo, una respuesta estructuralmente válida puede contener interpretacio
 
 Para evaluar la consistencia de forma más amplia, es necesario incorporar casos de prueba adicionales y criterios de evaluación definidos.
 
-## 10. Limitaciones y mejoras futuras
+## 10. Registro del desarrollo y ensayo de instalación limpia
 
-Entre las posibles mejoras se encuentran:
+- **Fecha:** 2026-10-23
+- **Desarrollo:** creación del banco de prompts, elaboración de un notebook y preparación de pruebas automatizadas.
+- **Pruebas:** implementación de pruebas unitarias, archivo `conftest.py` para la configuración compartida de las pruebas y pruebas de consistencia de los prompts.
+- **Hallazgo:** después de publicar el Bloque 10, descubrí que faltaba incluir `pytest` en `requirements.txt`, porque había incorporado las pruebas posteriormente.
+- **Corrección:** actualicé `requirements.txt` y registré el cambio en Git antes de iniciar el Bloque 11.
 
-- Ampliar el conjunto de comentarios de prueba.
-- Incorporar más casos ambiguos y situaciones límite.
-- Profundizar en la validación semántica de las respuestas.
-- Añadir pruebas automatizadas con `pytest`.
-- Mejorar el registro y análisis de errores.
-- Evaluar el comportamiento de diferentes modelos.
-- Medir los costos asociados al consumo de la API.
-- Evitar la duplicación del banco de prompts entre los distintos componentes del proyecto.
+### Bloque 11: Ensayo de instalación limpia
 
-## 11. Conclusión
+- **Procedimiento:** cloné mi repositorio, instalé las dependencias y configuré las variables de entorno mediante el archivo `.env`.
+- **Resultado:** ejecuté `main.py` sin errores en el repositorio clonado.
+- **Validación de consistencia:** ejecuté `prompts/test_consistencia.py` y obtuve 9 de 9 respuestas válidas (100 % de éxito).
+- **Evidencia:** notebook del proyecto, pruebas automatizadas, `conftest.py` y archivo `prompts/registro_resultados.json` generado durante las pruebas.
+
+## 12. Conclusión
 
 El proyecto integra un banco de tres prompts especializados con una API de inteligencia artificial generativa para analizar comentarios de encuestas de satisfacción.
 
