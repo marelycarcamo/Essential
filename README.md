@@ -110,6 +110,8 @@ plantilla-repositorio-base/
 
 Los archivos `src/banco_prompts.py` y `prompts/banco.py` son independientes. Actualmente, `main.py` utiliza el primero, mientras que el script de consistencia utiliza el segundo.
 
+
+
 ## 6. Requisitos previos
 
 Se necesita:
@@ -139,6 +141,10 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1/chat/completions
 Reemplaza `tu_clave_api` por tu propia clave de OpenRouter.
 
 **Importante:** No compartas tu clave API ni la subas al repositorio. El archivo `.env` debe estar excluido mediante `.gitignore`. El archivo `.env.example` puede documentar las variables necesarias sin incluir credenciales reales.
+
+
+### 7.1 Diagrama de flujo para consumir OpenRouter
+![Diagrama técnico e instructivo titulado Diagrama de flujo – Consumir OpenRouter. Sobre fondo blanco, cajas de colores y flechas muestran cómo una pregunta se envía a OpenRouter, se extrae el texto de la respuesta y se calcula el costo. El flujo comienza en Inicio y obtener_dato_de_prueba(pregunta), continúa con armar_peticion(pregunta), enviar_peticion(url, headers, body) y extraer_texto(datos), y termina con el resultado para quien llamó la función. La petición valida que la pregunta no esté vacía, obtiene OPENROUTER_API_KEY desde .env mediante os.getenv() y construye URL, headers de Authorization y body. La respuesta HTTP se valida y se convierte con respuesta.json(); después se extrae choices[0].message.content. Un proceso adicional usa prompt_tokens y completion_tokens para calcular el costo de la consulta en USD según los precios del modelo. El panel Manejo de errores enumera ValueError para pregunta vacía y RuntimeError para clave ausente, conexión, timeout, error HTTP, JSON inválido o estructura inesperada; el bloque principal captura ValueError y RuntimeError y muestra No se pudo completar la operación. También aparecen ConnectionError, Timeout, JSONDecodeError, KeyError, IndexError y TypeError. La leyenda distingue función, proceso, decisión, error o excepción, cálculo, flujo normal y flujo de error. Las flechas identifican pregunta de entrada, petición, respuesta HTTP cruda, JSON, texto generado, datos de uso y costo calculado. Una sección final lista GEMINI_API_KEY / OPENROUTER_API_KEY, manejo de errores, cálculo de costo y el orden de funciones armar_peticion → enviar_peticion → extraer_texto.](docs/Diagrama_de_flujo_para_consumir_OpenRouter.png)
 
 ## 8. Ejecución del proyecto
 
@@ -235,12 +241,22 @@ Para evaluar la consistencia de forma más amplia, es necesario incorporar casos
 - **Hallazgo:** después de publicar el Bloque 10, descubrí que faltaba incluir `pytest` en `requirements.txt`, porque había incorporado las pruebas posteriormente.
 - **Corrección:** actualicé `requirements.txt` y registré el cambio en Git antes de iniciar el Bloque 11.
 
-### Bloque 11: Ensayo de instalación limpia
+##### Bloque 11: Ensayo de instalación limpia
 
 - **Procedimiento:** cloné mi repositorio, instalé las dependencias y configuré las variables de entorno mediante el archivo `.env`.
 - **Resultado:** ejecuté `main.py` sin errores en el repositorio clonado.
 - **Validación de consistencia:** ejecuté `prompts/test_consistencia.py` y obtuve 9 de 9 respuestas válidas (100 % de éxito).
 - **Evidencia:** notebook del proyecto, pruebas automatizadas, `conftest.py` y archivo `prompts/registro_resultados.json` generado durante las pruebas.
+
+## 11. Limitaciones y mejoras futuras
+Entre las posibles mejoras se encuentran:
+- Ampliar el conjunto de comentarios de prueba.
+- Incorporar más casos ambiguos y situaciones límite.
+- Profundizar en la validación semántica de las respuestas.
+- Mejorar el registro y análisis de errores.
+- Evaluar el comportamiento de diferentes modelos.
+- Medir los costos asociados al consumo de la API.
+- Evitar la duplicación del banco de prompts entre los distintos componentes del proyecto.
 
 ## 12. Conclusión
 
