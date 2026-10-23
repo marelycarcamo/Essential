@@ -1,0 +1,17 @@
+{
+  "clasificar_comentario": {
+    "exitos": 3,
+    "intentos": 3,
+    "fallos": []
+  },
+  "identificar_oportunidades": {
+    "exitos": 3,
+    "intentos": 3,
+    "fallos": []
+  },
+  "generar_recomendaciones": {
+    "exitos": 3,
+    "intentos": 3,
+    "fallos": []
+  }
+}

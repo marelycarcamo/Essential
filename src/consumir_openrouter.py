@@ -5,8 +5,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def armar_peticion(pregunta):
-    """Valida la pregunta y prepara la solicitud a OpenRouter."""
+
+def armar_peticion(pregunta, system_instruction=None, response_schema=None):
+    """Valida la entrada y prepara una solicitud a OpenRouter."""
 
     if not pregunta or not pregunta.strip():
         raise ValueError("La pregunta no puede estar vacía.")
@@ -17,22 +18,47 @@ def armar_peticion(pregunta):
         raise RuntimeError("No se encontró la API key de OpenRouter.")
 
     modelo = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
-    url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
+    url = os.getenv(
+        "OPENROUTER_BASE_URL",
+        "https://openrouter.ai/api/v1/chat/completions"
+    )
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
+    # Construimos los mensajes de la conversación.
+    messages = []
+
+    if system_instruction:
+        messages.append({
+            "role": "system",
+            "content": system_instruction
+        })
+
+    messages.append({
+        "role": "user",
+        "content": pregunta
+    })
+
     body = {
         "model": modelo,
-        "messages": [
-            {
-                "role": "user",
-                "content": pregunta
-            }
-        ]
+        "messages": messages
     }
+
+    # Añadimos el esquema si se ha proporcionado.
+    # OpenRouter utiliza la API de chat completions de distintos modelos;
+    # el soporte de JSON Schema depende del modelo seleccionado.
+    if response_schema:
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "respuesta_estructurada",
+                "strict": True,
+                "schema": response_schema
+            }
+        }
 
     return url, headers, body
 
