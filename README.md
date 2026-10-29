@@ -78,6 +78,7 @@ plantilla-repositorio-base/
 │   ├── consumir_deepseek.py
 │   ├── consumir_gemini.py
 │   ├── consumir_openrouter.py
+│   ├── costos.py
 │   ├── errores.py
 │   └── parsear_json.py
 ├── tests/
@@ -87,12 +88,16 @@ plantilla-repositorio-base/
 │   ├── test_consumir_deepseek.py
 │   ├── test_consumir_gemini.py
 │   ├── test_consumir_openrouter.py
+│   ├── test_costos.py
 │   ├── test_integracion.py
 │   ├── test_main.py
 │   └── test_parsear_json.py
+├── experimentos/
+│   └── ensayo_rate_limit.py
 ├── .env.example
 ├── .gitignore
 ├── main.py
+├── pytest.ini
 ├── README.md
 └── requirements.txt
 
@@ -110,7 +115,11 @@ plantilla-repositorio-base/
 | `src/consumir_gemini.py` | Proveedor de respaldo: arma, envía y extrae la respuesta de la API de Gemini con el mismo contrato de llamada que DeepSeek. |
 | `src/cliente.py` | Expone `consultar_modelo()` como única función pública: arma la petición, la envía con reintento automático y devuelve el texto. |
 | `src/errores.py` | Define las excepciones propias del cliente y su relación con las excepciones estándar de Python. |
+| `src/costos.py` | Calcula el costo de cada operación a partir de los tokens informados por el proveedor, con tarifas por componente y distinción entre hora punta y hora valle, y mantiene el acumulado de la sesión. |
 | `src/parsear_json.py` | Procesa las respuestas JSON y comprueba las claves esperadas. |
+| `tests/conftest.py` | Agrega `src/` al `sys.path` y reinicia el acumulado de costo antes y después de cada prueba. |
+| `pytest.ini` | Excluye por defecto el test que llama al proveedor real, para que la suite no consuma cuota. |
+| `experimentos/ensayo_rate_limit.py` | Provoca un límite de uso real contra el proveedor de respaldo y muestra el backoff y su techo en vivo. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -125,7 +134,7 @@ Los archivos `src/banco_prompts.py` y `prompts/banco.py` son independientes. Act
 Se necesita:
 
 - Python instalado.
-- Una clave API de OpenRouter.
+- Al menos una clave API del proveedor que se vaya a usar: **OpenRouter** para `main.py` y el script de consistencia, **DeepSeek** para el cliente modular. Gemini es opcional, como respaldo.
 - Las dependencias declaradas en `requirements.txt`.
 
 Instala las dependencias desde la raíz del repositorio:
@@ -161,15 +170,28 @@ python -c "import sys; print(sys.executable)"
 
 ## 7. Configuración
 
-Crea un archivo `.env` en la raíz del proyecto con las siguientes variables:
+Crea un archivo `.env` en la raíz del proyecto. El archivo `.env.example` lista todas las variables con valores de referencia; esta es la misma lista:
 
 ```dotenv
+# OpenRouter: lo usan main.py y prompts/test_consistencia.py
 OPENROUTER_API_KEY=tu_clave_api
 OPENROUTER_MODEL=openai/gpt-4o-mini
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1/chat/completions
+
+# DeepSeek: proveedor principal del cliente modular
+DEEPSEEK_API_KEY=tu_clave_deepseek
+DEEPSEEK_MODEL=deepseek-flash
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+
+# Gemini: proveedor de respaldo del cliente modular
+GEMINI_API_KEY=tu_clave_gemini
+GEMINI_MODEL=gemini-3.8-flash
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 ```
 
-Reemplaza `tu_clave_api` por tu propia clave de OpenRouter.
+Reemplaza cada valor por tu propia clave. Solo necesitas las del proveedor que vayas a usar: `main.py` no lee las de DeepSeek, y el cliente modular no lee las de OpenRouter.
+
+`GEMINI_MODEL` tiene que ser un nombre que exista en el catálogo de la API. Si no lo es, la llamada devuelve **HTTP 404** con el mensaje `models/<nombre> is not found`. El catálogo actual se consulta en `GET https://generativelanguage.googleapis.com/v1beta/models`.
 
 **Importante:** No compartas tu clave API ni la subas al repositorio. El archivo `.env` debe estar excluido mediante `.gitignore`. El archivo `.env.example` puede documentar las variables necesarias sin incluir credenciales reales.
 
@@ -220,6 +242,24 @@ Durante la ejecución:
 7. Genera o actualiza `prompts/registro_resultados.json`.
 
 Se incluye una pausa entre solicitudes para espaciar las llamadas a la API y reducir el riesgo de alcanzar los límites de cuota.
+
+### 8.3. Ejecutar las pruebas automatizadas
+
+Desde la raíz del repositorio:
+
+```bash
+python -m pytest
+```
+
+La suite **no toca la red**: las llamadas al proveedor se reemplazan por dobles y `time.sleep` se intercepta, así que no consume cuota y corre en menos de un segundo. El único test que llama al proveedor real está marcado y excluido por defecto; para correrlo a propósito: `python -m pytest -m integracion`.
+
+### 8.4. Reproducir el ensayo de rate limit
+
+```bash
+python experimentos/ensayo_rate_limit.py
+```
+
+Provoca un límite de uso real contra Gemini y muestra cómo el backoff espera cada vez más hasta llegar a su techo. **Consume cuota del proveedor**, así que no forma parte de la suite automática.
 
 ## 9. Pruebas y validación
 
@@ -284,6 +324,46 @@ La entrega del Bloque 12 se verificó en dos niveles: pruebas automatizadas, que
 
 Los escenarios 3 y 4 se validan con dobles de red porque una falla temporal no se puede provocar a voluntad sobre el proveedor. La limitación se asume de forma explícita: los dobles confirman que el cliente reacciona como corresponde, no que el proveedor responda 429 en ese momento.
 
+### 9.5. Verificación del proveedor de respaldo
+
+`src/consumir_gemini.py` existe desde el Bloque 12 como respaldo del proveedor principal, pero hasta el Bloque 13 nunca se había ejecutado contra la API real.
+
+Al ejercitarlo por primera vez devolvió **HTTP 404**: el modelo configurado en `.env` (`gemini-3-flash`) no existe en el catálogo de Google. El nombre más parecido es `gemini-3-flash-preview`, pero no es el mismo identificador.
+
+El fallo no produjo ningún síntoma durante el Bloque 12 porque **nadie llamaba a ese módulo**. Un valor de configuración incorrecto en un camino de código que nunca se ejecuta no tiene forma de manifestarse.
+
+**Corrección:** se consultó el catálogo real de modelos (`GET /v1beta/models`) y se fijó `gemini-3.8-flash`, un modelo estable —sin el sufijo `preview`— que sí acepta `generateContent`.
+
+**Aprendizaje:** un respaldo que nunca se ha ejercitado no es un respaldo. Es la misma regla que se aplica a los dobles de prueba: la interfaz puede estar bien escrita y, aun así, apuntar a un destino que no existe. Toda integración con un tercero debería correrse al menos una vez contra el proveedor real.
+
+### 9.6. Trazabilidad del checklist de pruebas del cliente
+
+El Bloque 14 pide una suite que cubra cuatro funciones del cliente, con al menos una prueba por cada requisito del checklist. La suite se fue construyendo en los Bloques 12 y 13; esta tabla verifica que no falte ninguno.
+
+| Función | Lo que debe verificar | Prueba que lo cubre |
+|---|---|---|
+| `enviar_peticion` | Un 401 o 403 lanza `ValueError` | `test_credencial_invalida_lanza_error_autenticacion` (401 y 403) |
+| | Un 429 o 500+ lanza `TimeoutError` | `test_falla_momentanea_lanza_error_temporal_con_el_codigo` (429, 500, 502 y 503) |
+| | Una respuesta exitosa devuelve el JSON tal cual | `test_respuesta_exitosa_devuelve_el_json` |
+| `con_reintento` | Reintenta cuando la función protegida lanza `TimeoutError` | `test_reintenta_y_luego_responde` |
+| | No reintenta otro tipo de excepción | `test_con_reintento_no_captura_errores_no_temporales` |
+| | Al agotar los intentos, se propaga la excepción original | `test_con_reintento_propaga_el_error_original` |
+| `registrar_costo` | Calcula el costo a partir de un conteo de tokens conocido | `test_suma_entrada_y_salida_con_sus_tarifas` |
+| | Ese costo se suma al acumulado de la sesión | `test_registrar_costo_acumula_entre_operaciones` |
+| `consultar_modelo` | Convierte un `TimeoutError` agotado en `RuntimeError` | `test_agota_los_intentos_y_lanza_error_propio` |
+| | Un `ValueError` se propaga sin cambios | `test_pregunta_vacia_lanza_valueerror` y `test_pregunta_que_no_es_texto_lanza_valueerror` |
+
+La suite reúne **133 pruebas**, de las cuales **132 corren por defecto en menos de medio segundo**. La restante, `test_integracion_real_openrouter`, llama al proveedor de verdad y **está excluida por defecto** desde `pytest.ini`, porque consumía cuota en cada corrida y dejaba el resultado a merced de la latencia del servicio. Se ejecuta a propósito con `python -m pytest -m integracion`.
+
+Ese detalle salió del propio consejo del bloque: si la suite tarda varios segundos, alguna prueba está llamando a la red. La nuestra tardaba 4,11 s y la causa era exactamente esa.
+
+**Desviaciones respecto del material, y su motivo.**
+
+1. **Ubicación de los archivos.** El material pide `test_cliente.py` junto a `cliente.py` en la raíz para que `pytest` pueda importar el módulo. Aquí el código vive en `src/` y las pruebas en `tests/`, y `tests/conftest.py` agrega `src/` al `sys.path`. El `ModuleNotFoundError` se evita igual, y separar código de pruebas se vuelve necesario cuando la suite pasa de un archivo.
+2. **Las excepciones propias son las del material, con nombre.** El checklist espera `ValueError` para 401/403 y `TimeoutError` para 429/5xx. `ErrorAutenticacion` hereda de `ValueError` y `ErrorTemporal` hereda de `TimeoutError`, así que un `pytest.raises(ValueError)` escrito tal cual el material pasaría; las pruebas fijan la excepción específica, que es más estricta.
+3. **El valor exacto de la espera.** El material advierte no verificar cuánto se espera, porque el jitter es aleatorio. Aquí el jitter se neutraliza con una fixture para poder comprobar la progresión del backoff —1, 2 y 4 segundos, y el techo en 6— y aparte se verifica que la parte aleatoria caiga dentro del rango esperado. Sin neutralizarlo, la prueba de la progresión sería imposible; sin la prueba del rango, el jitter quedaría sin cubrir.
+4. **`registrar_costo` vive en `src/costos.py`.** Se importa en `cliente.py`, así que `cliente.registrar_costo` existe y la interfaz que el checklist nombra se mantiene. El acumulado se lee con `costos.costo_acumulado()` en lugar de un atributo de módulo, y una fixture `autouse` lo reinicia antes y después de cada prueba para que una prueba no contamine a la siguiente.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -301,6 +381,7 @@ Los escenarios 3 y 4 se validan con dobles de red porque una falla temporal no s
 
 ##### Bloque 12: Cliente modular con clasificación de errores y reintento
 
+- **Ubicación en el programa:** primer bloque del Gate 2, dentro del Módulo 2 (Operatividad de aplicaciones generativas: APIs, orquestación, RAG y personalización).
 - **Objetivo:** agrupar el consumo del modelo detrás de una única función pública que clasifique los errores del proveedor y reintente las fallas temporales, sin repetir esa lógica en cada parte del proyecto que consulte la API.
 - **Implementación:** creé `src/errores.py` con `ErrorAutenticacion`, `ErrorTemporal` y `ErrorReintentosAgotados`; `src/cliente.py` con `consultar_modelo()` como entrada pública y `con_reintento()` como lógica interna; y llevé `src/consumir_deepseek.py` al mismo estándar, con timeout, instrucción de sistema y clasificación de respuestas. Agregué `src/consumir_gemini.py` como proveedor de respaldo con el mismo contrato de llamada.
 - **Decisión:** las excepciones propias heredan de `ValueError`, `TimeoutError` y `RuntimeError` para que los manejos de error que ya existían en el proyecto sigan funcionando sin modificaciones.
@@ -311,6 +392,16 @@ Los escenarios 3 y 4 se validan con dobles de red porque una falla temporal no s
 - **Corrección adicional:** la validación de entrada comprobaba únicamente que la pregunta no estuviera vacía. Con un valor que no fuera texto, el programa fallaba con `AttributeError` en lugar de informar el problema. Agregué una comprobación de tipo con un mensaje explícito.
 - **Evidencia:** 115 pruebas automatizadas que no realizan llamadas reales, más las verificaciones manuales de la sección 9.4.
 
+##### Bloque 13: Backoff exponencial, jitter y control de costo por operación
+
+- **Objetivo:** reemplazar la espera fija entre reintentos por un backoff exponencial con techo y aleatoriedad (jitter), e incorporar el registro de costo acumulado por operación a partir de los tokens informados por el proveedor.
+- **Implementación:** creé `src/costos.py` con la tabla oficial de precios por componente (cache hit, cache miss, salida) y el selector de hora punta y hora valle en UTC. Actualicé `con_reintento` en `src/cliente.py` con una progresión geométrica de la espera, techo de 30s y 10% de jitter. Amplié la suite con 18 tests nuevos en `tests/test_costos.py` y el ajuste de `tests/test_cliente.py` (133 pruebas en total).
+- **Decisión (tarifas):** el material del bloque propone usar un único costo promedio por 1.000 tokens. DeepSeek, en cambio, cobra distinto la entrada con caché, la entrada sin caché y la salida, además de duplicar su tarifa en horas punta. Usar un número único habría generado un error de estimación de hasta 13x. Se optó por un cálculo desglosado fiel a la documentación oficial.
+- **Decisión (rate limit):** el ejercicio sugiere provocar un HTTP 429 de forma intencional mediante un bucle rápido. Sin embargo, la documentación de DeepSeek especifica que no aplica un límite de peticiones por minuto (RPM), sino un límite estricto de concurrencia de 2.500 peticiones simultáneas. Por ello, el comportamiento del 429 y del backoff se validó de forma rigurosa mediante dobles de red y pruebas automatizadas, documentando el desvío operativo respecto al proveedor.
+- **Ensayo de rate limit:** se ejecutó contra Gemini, el proveedor de respaldo, porque DeepSeek no limita por minuto. El primer intento falló con un error temporal y el backoff esperó **1,00 s → 2,10 s → 4,07 s**: la progresión 1-2-4 con el jitter visible en los decimales. En una segunda corrida se confirmó el techo: **1,10 s → 2,04 s → 4,01 s → 6,37 s**, es decir, dejó de duplicar al llegar al máximo de 6 s en vez de seguir a 8 y 16. Ambas corridas se interrumpieron, una por consumo de cuota y otra por timeouts encadenados.
+- **Hallazgo (diagnóstico):** el mensaje de error agrupaba el 429 y los 5xx en una misma frase sin el código HTTP, así que no permitía distinguir un límite de uso de una caída del servidor. Se corrigió para que el mensaje incluya el código recibido, en los dos proveedores. Sin ese dato, el ensayo no puede afirmar qué falló: solo que fue un error temporal.
+- **Evidencia:** 133 pruebas unitarias y de comportamiento en verde, ejecutadas en entorno aislado sin alterar la interfaz pública del cliente.
+
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
 - Ampliar el conjunto de comentarios de prueba.
@@ -320,9 +411,9 @@ Entre las posibles mejoras se encuentran:
 - Evaluar el comportamiento de diferentes modelos.
 - Medir los costos asociados al consumo de la API.
 - Evitar la duplicación del banco de prompts entre los distintos componentes del proyecto.
-- Reemplazar la pausa fija entre reintentos por una espera creciente (backoff).
 - Permitir que el cliente alterne entre proveedores sin modificar el código que lo consume.
-- Registrar el costo por consulta a partir de los datos de uso que ya devuelve el proveedor.
+- Modelar los feriados del proveedor al calcular la tarifa de hora punta.
+- Registrar el costo en un archivo o base de datos para conservarlo entre ejecuciones.
 
 ## 12. Conclusión
 

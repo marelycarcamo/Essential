@@ -7,7 +7,9 @@ A diferencia de los tests unitarios, aquí se ejercita la cadena real:
 Solo se reemplaza el borde de red (``requests.post``) por un doble, de forma que
 toda la lógica del proyecto se ejecuta de verdad, sin conectar a Internet.
 
-También hay un test *real* opcional que se salta si no hay ``OPENROUTER_API_KEY``.
+También hay un test *real* opcional que se salta si no hay ``OPENROUTER_API_KEY``
+y que ``pytest.ini`` excluye por defecto: consume cuota, así que solo se corre a
+propósito con ``python -m pytest -m integracion``.
 """
 
 import os
@@ -148,6 +150,7 @@ def test_pipeline_error_http_se_propaga(monkeypatch):
 # Integración real (opt-in): se salta si no hay credenciales
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integracion
 @pytest.mark.skipif(
     not os.getenv("OPENROUTER_API_KEY"),
     reason="Requiere OPENROUTER_API_KEY (test de integración real).",

@@ -98,8 +98,12 @@ def enviar_peticion(url, headers, body):
         )
 
     if respuesta.status_code == 429 or respuesta.status_code >= 500:
+        # El código va en el mensaje a propósito: "no pudo procesar" no distingue
+        # un límite de uso (429) de una caída del servidor (5xx). Se reintentan
+        # igual, pero saber cuál fue cambia el diagnóstico.
         raise ErrorTemporal(
-            "DeepSeek no pudo procesar la petición. Hay que esperar y reintentar."
+            f"DeepSeek devolvió HTTP {respuesta.status_code}. "
+            "Hay que esperar y reintentar."
         )
 
     if not respuesta.ok:

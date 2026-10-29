@@ -118,8 +118,9 @@ def test_credencial_invalida_lanza_error_autenticacion(monkeypatch, codigo):
 
 
 @pytest.mark.parametrize("codigo", [429, 500, 502, 503], ids=["429", "500", "502", "503"])
-def test_falla_momentanea_lanza_error_temporal(monkeypatch, codigo):
-    with pytest.raises(cd.ErrorTemporal):
+def test_falla_momentanea_lanza_error_temporal_con_el_codigo(monkeypatch, codigo):
+    """El mensaje debe incluir el código: 429 y 5xx no son el mismo diagnóstico."""
+    with pytest.raises(cd.ErrorTemporal, match=str(codigo)):
         _enviar_con_respuesta(monkeypatch, RespuestaFalsa(codigo))
 
 
