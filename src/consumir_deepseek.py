@@ -3,13 +3,20 @@ import os
 import requests
 from dotenv import load_dotenv
 
+from errores import ErrorAutenticacion, ErrorTemporal
+
 load_dotenv()
 
 
-def armar_peticion(pregunta):
+def armar_peticion(pregunta, system_instruction=None):
     """Valida la pregunta y prepara la solicitud a DeepSeek."""
 
-    if not pregunta or not pregunta.strip():
+    if not isinstance(pregunta, str):
+        raise ValueError(
+            f"La pregunta debe ser texto; se recibió {type(pregunta).__name__}."
+        )
+
+    if not pregunta.strip():
         raise ValueError("La pregunta no puede estar vacía.")
 
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -32,20 +39,46 @@ def armar_peticion(pregunta):
 
     body = {
         "model": modelo,
-        "messages": [
-            {
-                "role": "user",
-                "content": pregunta
-            }
-        ],
+        "messages": _armar_mensajes(pregunta, system_instruction),
         "stream": False
     }
 
     return url, headers, body
 
 
+def _armar_mensajes(pregunta, system_instruction=None):
+    """Construye la lista de mensajes de la conversación.
+
+    La instrucción de sistema, si existe, va primero: es el contexto permanente
+    que el modelo debe respetar durante todo el intercambio.
+    """
+
+    messages = []
+
+    if system_instruction:
+        messages.append({
+            "role": "system",
+            "content": system_instruction
+        })
+
+    messages.append({
+        "role": "user",
+        "content": pregunta
+    })
+
+    return messages
+
+
 def enviar_peticion(url, headers, body):
-    """Envía la solicitud y devuelve la respuesta JSON."""
+    """Envía la solicitud y devuelve la respuesta JSON.
+
+    Clasifica el fallo según lo que corresponda hacer con él:
+
+    - 401/403 -> ``ErrorAutenticacion``: no se reintenta, hay que corregir la clave.
+    - 429/5xx, timeout, error de conexión -> ``ErrorTemporal``: se reintenta.
+    - Cualquier otro error HTTP o JSON inválido -> ``RuntimeError``: no es
+      reintentable y no es de credenciales.
+    """
 
     try:
         respuesta = requests.post(
@@ -54,14 +87,20 @@ def enviar_peticion(url, headers, body):
             json=body,
             timeout=60
         )
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError(
-            "No se pudo conectar con DeepSeek."
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        raise ErrorTemporal(
+            "No se pudo contactar con DeepSeek. Puede ser momentáneo."
         ) from None
-    except requests.exceptions.Timeout:
-        raise RuntimeError(
-            "DeepSeek tardó demasiado en responder."
-        ) from None
+
+    if respuesta.status_code in (401, 403):
+        raise ErrorAutenticacion(
+            "Credencial inválida o sin permiso. Revisa tu DEEPSEEK_API_KEY."
+        )
+
+    if respuesta.status_code == 429 or respuesta.status_code >= 500:
+        raise ErrorTemporal(
+            "DeepSeek no pudo procesar la petición. Hay que esperar y reintentar."
+        )
 
     if not respuesta.ok:
         raise RuntimeError(

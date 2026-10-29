@@ -73,14 +73,19 @@ plantilla-repositorio-base/
 │   └── test_consistencia.py
 ├── src/
 │   ├── banco_prompts.py
+│   ├── cliente.py
 │   ├── comparar_modelos.py
 │   ├── consumir_deepseek.py
+│   ├── consumir_gemini.py
 │   ├── consumir_openrouter.py
+│   ├── errores.py
 │   └── parsear_json.py
 ├── tests/
 │   ├── conftest.py
 │   ├── test_banco_prompts.py
+│   ├── test_cliente.py
 │   ├── test_consumir_deepseek.py
+│   ├── test_consumir_gemini.py
 │   ├── test_consumir_openrouter.py
 │   ├── test_integracion.py
 │   ├── test_main.py
@@ -102,6 +107,9 @@ plantilla-repositorio-base/
 | `main.py` | Coordina la ejecución del banco de prompts y presenta un resumen. |
 | `src/banco_prompts.py` | Define el banco utilizado por el punto de entrada principal. |
 | `src/consumir_openrouter.py` | Prepara las solicitudes, consulta la API y extrae las respuestas. |
+| `src/consumir_gemini.py` | Proveedor de respaldo: arma, envía y extrae la respuesta de la API de Gemini con el mismo contrato de llamada que DeepSeek. |
+| `src/cliente.py` | Expone `consultar_modelo()` como única función pública: arma la petición, la envía con reintento automático y devuelve el texto. |
+| `src/errores.py` | Define las excepciones propias del cliente y su relación con las excepciones estándar de Python. |
 | `src/parsear_json.py` | Procesa las respuestas JSON y comprueba las claves esperadas. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
@@ -127,6 +135,29 @@ pip install -r requirements.txt
 ```
 
 Si trabajas con un entorno virtual, actívalo antes de ejecutar los comandos.
+
+### 6.1. Entorno virtual y elección del intérprete
+
+El proyecto se ejecuta dentro de un entorno virtual propio. Actívalo antes de instalar dependencias o de ejecutar cualquier comando:
+
+```powershell
+& .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+En macOS o Linux el comando equivalente es `source .venv/bin/activate`.
+
+Una vez activado, `python`, `pip` y `pytest` apuntan al entorno del proyecto sin necesidad de escribir la ruta completa.
+
+**No uses el lanzador `py` de Windows.** Ese lanzador ejecuta el Python instalado en el sistema, no el del proyecto. Los dos pueden tener exactamente la misma versión, así que el cambio de intérprete no produce ningún mensaje de error: solo aparecen librerías faltantes, o se instalan en un entorno que no corresponde.
+
+Por la misma razón, `pip freeze > requirements.txt` solo debe ejecutarse con el entorno virtual activo. Ese archivo describe las dependencias del proyecto, no las de la máquina.
+
+Como comprobación rápida, el intérprete en uso debe apuntar a la carpeta `.venv`:
+
+```powershell
+python -c "import sys; print(sys.executable)"
+```
 
 ## 7. Configuración
 
@@ -233,6 +264,26 @@ Sin embargo, una respuesta estructuralmente válida puede contener interpretacio
 
 Para evaluar la consistencia de forma más amplia, es necesario incorporar casos de prueba adicionales y criterios de evaluación definidos.
 
+### 9.4. Verificación del cliente modular
+
+La entrega del Bloque 12 se verificó en dos niveles: pruebas automatizadas, que no realizan llamadas reales, y escenarios manuales contra la API.
+
+**Pruebas automatizadas.** La suite reúne 115 pruebas. Las que ejercitan el cliente reemplazan la llamada de red por un doble y sustituyen `time.sleep`, de modo que los reintentos se prueban sin esperar ni consumir cuota.
+
+**Escenarios manuales.**
+
+| # | Escenario | Cómo se ejecutó | Resultado |
+|---|---|---|---|
+| 1 | Consulta normal: el cliente devuelve el texto del modelo | Pendiente de ejecución con la API real | — |
+| 2 | Credenciales inválidas: se clasifica como error de configuración y no se reintenta | Llamada real con clave inválida, sobre DeepSeek y sobre Gemini | Correcto en ambos proveedores |
+| 3 | Falla temporal (429 o 5xx): se reintenta antes de fallar | Dobles de red en la suite | Correcto: tres intentos y luego error propio |
+| 4 | Reintentos agotados: el error final es explícito y conserva la causa original | Dobles de red en la suite | Correcto: se levanta `ErrorReintentosAgotados` |
+| 5 | Entrada no textual: el cliente informa el problema en lugar de fallar con un error interno | Ejecución local con una lista en lugar de un texto | Correcto: `ValueError` con mensaje explícito |
+
+**Sobre la clasificación en Gemini.** Google no responde 401 cuando la clave es inválida: devuelve 400 con el campo `error.details[].reason` en `API_KEY_INVALID`. La detección se implementó leyendo ese campo estructurado y no el texto del mensaje, porque la redacción del texto puede cambiar. El caso se verificó contra la API real.
+
+Los escenarios 3 y 4 se validan con dobles de red porque una falla temporal no se puede provocar a voluntad sobre el proveedor. La limitación se asume de forma explícita: los dobles confirman que el cliente reacciona como corresponde, no que el proveedor responda 429 en ese momento.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -248,6 +299,18 @@ Para evaluar la consistencia de forma más amplia, es necesario incorporar casos
 - **Validación de consistencia:** ejecuté `prompts/test_consistencia.py` y obtuve 9 de 9 respuestas válidas (100 % de éxito).
 - **Evidencia:** notebook del proyecto, pruebas automatizadas, `conftest.py` y archivo `prompts/registro_resultados.json` generado durante las pruebas.
 
+##### Bloque 12: Cliente modular con clasificación de errores y reintento
+
+- **Objetivo:** agrupar el consumo del modelo detrás de una única función pública que clasifique los errores del proveedor y reintente las fallas temporales, sin repetir esa lógica en cada parte del proyecto que consulte la API.
+- **Implementación:** creé `src/errores.py` con `ErrorAutenticacion`, `ErrorTemporal` y `ErrorReintentosAgotados`; `src/cliente.py` con `consultar_modelo()` como entrada pública y `con_reintento()` como lógica interna; y llevé `src/consumir_deepseek.py` al mismo estándar, con timeout, instrucción de sistema y clasificación de respuestas. Agregué `src/consumir_gemini.py` como proveedor de respaldo con el mismo contrato de llamada.
+- **Decisión:** las excepciones propias heredan de `ValueError`, `TimeoutError` y `RuntimeError` para que los manejos de error que ya existían en el proyecto sigan funcionando sin modificaciones.
+- **Diferencia con el material del bloque:** el ejercicio se plantea sobre la API de Gemini. Lo implementé sobre DeepSeek, que es el proveedor definido en `docs/decision-arquitectura.md`, y dejé Gemini como respaldo. El patrón solicitado —función pública única, clasificación de errores, reintento interno y error propio al agotar los intentos— se mantiene igual.
+- **Hallazgo (clasificación):** con una clave inválida, DeepSeek responde 401, pero Gemini responde 400 con `error.details[].reason = "API_KEY_INVALID"`. Si hubiera clasificado solo por el código HTTP, el error de credenciales de Gemini habría quedado registrado como un error genérico.
+- **Hallazgo (intérprete):** al ejecutar una prueba manual con el lanzador `py`, el intérprete utilizado fue el del sistema operativo y no el del entorno virtual, por lo que faltaban dependencias. Para resolverlo instalé las librerías y regeneré `requirements.txt` con `pip freeze`, lo que sobrescribió el archivo con las dependencias del Python global: se perdieron las versiones fijadas, desapareció `pytest` y se agregó `dotenv==0.9.9`, un paquete distinto de `python-dotenv` que ocupa el mismo nombre de módulo.
+- **Corrección:** restauré `requirements.txt` desde el historial de Git después de comprobar que su contenido coincidía con las dependencias del entorno virtual. El procedimiento correcto quedó documentado en la sección 6.1. El hallazgo se registró como error recurrente, porque ya había ocurrido antes con otro intérprete.
+- **Corrección adicional:** la validación de entrada comprobaba únicamente que la pregunta no estuviera vacía. Con un valor que no fuera texto, el programa fallaba con `AttributeError` en lugar de informar el problema. Agregué una comprobación de tipo con un mensaje explícito.
+- **Evidencia:** 115 pruebas automatizadas que no realizan llamadas reales, más las verificaciones manuales de la sección 9.4.
+
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
 - Ampliar el conjunto de comentarios de prueba.
@@ -257,6 +320,9 @@ Entre las posibles mejoras se encuentran:
 - Evaluar el comportamiento de diferentes modelos.
 - Medir los costos asociados al consumo de la API.
 - Evitar la duplicación del banco de prompts entre los distintos componentes del proyecto.
+- Reemplazar la pausa fija entre reintentos por una espera creciente (backoff).
+- Permitir que el cliente alterne entre proveedores sin modificar el código que lo consume.
+- Registrar el costo por consulta a partir de los datos de uso que ya devuelve el proveedor.
 
 ## 12. Conclusión
 
