@@ -9,6 +9,7 @@ PR: describe la entrega del bloque, no los commits uno por uno.
 
 - **Bloque:** <!-- número y nombre del bloque al que corresponde esta entrega -->
 - **Módulo:** M1 / M2 / M3
+- **Gate:** 1 / 2 / 3
 
 ## Qué se entrega
 
