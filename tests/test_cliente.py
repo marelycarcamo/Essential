@@ -312,3 +312,24 @@ def test_una_consulta_que_agota_los_intentos_no_registra_costo(monkeypatch, espe
         cliente.consultar_modelo("pregunta")
 
     assert costos.costo_acumulado() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Contrato público del módulo
+# ---------------------------------------------------------------------------
+
+def test_el_cliente_expone_las_cuatro_funciones_del_contrato():
+    """Las cuatro funciones que nombra el checklist del bloque son accesibles.
+
+    Importa porque ``registrar_costo`` no está definida en ``cliente.py`` sino
+    en ``costos.py``, y solo se ve desde aquí porque se importa en la cabecera.
+    Si alguien cambia ese import, la interfaz se rompe en silencio: esta prueba
+    es la que lo detecta.
+    """
+    for nombre in (
+        "enviar_peticion",
+        "con_reintento",
+        "registrar_costo",
+        "consultar_modelo",
+    ):
+        assert callable(getattr(cliente, nombre)), f"cliente.{nombre} no es invocable"
