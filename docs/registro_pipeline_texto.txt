@@ -1,0 +1,37 @@
+Registro del pipeline de texto (Bloque 15)
+======================================================================
+
+[Caso 1]
+Consulta:   ¿Qué es Python? Responde en una sola oración.
+Referencia: Python es un lenguaje de programación interpretado.
+Respuesta:  Python es un lenguaje de programación de alto nivel, interpretado, de propósito general y con una sintaxis clara que facilita el desarrollo de software.
+Coincidencia con texto crudo:     85.7%
+Coincidencia con texto procesado: 100.0%
+
+[Caso 2]
+Consulta:   ¿Qué es una lista en Python? Responde en una sola oración.
+Referencia: Una lista es una colección ordenada y modificable de elementos.
+Respuesta:  Una lista en Python es una colección ordenada y mutable de elementos, que pueden ser de distintos tipos y se escriben entre corchetes separados por comas.
+Coincidencia con texto crudo:     80.0%
+Coincidencia con texto procesado: 88.9%
+
+[Caso 3]
+Consulta:   ¿Para qué sirve una función? Responde en una sola oración.
+Referencia: Una función agrupa instrucciones y puede recibir parámetros y devolver un resultado.
+Respuesta:  Una función sirve para agrupar y encapsular instrucciones reutilizables que realizan una tarea específica, facilitando la organización, el mantenimiento y la reutilización del código.
+Coincidencia con texto crudo:     36.4%
+Coincidencia con texto procesado: 36.4%
+
+Límites de la métrica (sin llamadas a la API)
+----------------------------------------------------------------------
+Orden: mismas palabras, significado opuesto.
+  Referencia: El perro persiguió al gato.
+  Respuesta:  El gato persiguió al perro.
+  Coincidencia: 100.0%
+
+Repeticiones: el conjunto no distingue una aparición de tres.
+  Referencia: el gato
+  Respuesta:  el gato el gato el gato
+  Coincidencia: 100.0%
+
+Costo acumulado de esta corrida: $0.00019065 USD

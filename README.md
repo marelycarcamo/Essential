@@ -59,12 +59,13 @@ Cada recomendación incluye una dimensión, una acción y un nivel de prioridad:
 ## 5. Estructura del proyecto
 
 ```text
-plantilla-repositorio-base/
+Essential/
 ├── docs/
 │   ├── decision-arquitectura.md
 │   ├── Diagrama de flujo para consumir OpenRouter.png
 │   ├── Evidencia_peticion_autenticada_Thunder_Client.png
-│   └── Evidencia_peticion_evidencia_autenticada_postman.png
+│   ├── Evidencia_peticion_evidencia_autenticada_postman.png
+│   └── registro_pipeline_texto.txt
 ├── notebooks/
 │   └── prueba_banco_prompts.ipynb
 ├── prompts/
@@ -80,7 +81,8 @@ plantilla-repositorio-base/
 │   ├── consumir_openrouter.py
 │   ├── costos.py
 │   ├── errores.py
-│   └── parsear_json.py
+│   ├── parsear_json.py
+│   └── pipeline_texto.py
 ├── tests/
 │   ├── conftest.py
 │   ├── test_banco_prompts.py
@@ -91,9 +93,11 @@ plantilla-repositorio-base/
 │   ├── test_costos.py
 │   ├── test_integracion.py
 │   ├── test_main.py
-│   └── test_parsear_json.py
+│   ├── test_parsear_json.py
+│   └── test_pipeline_texto.py
 ├── experimentos/
-│   └── ensayo_rate_limit.py
+│   ├── ensayo_rate_limit.py
+│   └── medir_pipeline.py
 ├── .env.example
 ├── .gitignore
 ├── main.py
@@ -120,6 +124,9 @@ plantilla-repositorio-base/
 | `tests/conftest.py` | Agrega `src/` al `sys.path` y reinicia el acumulado de costo antes y después de cada prueba. |
 | `pytest.ini` | Excluye por defecto el test que llama al proveedor real, para que la suite no consuma cuota. |
 | `experimentos/ensayo_rate_limit.py` | Provoca un límite de uso real contra el proveedor de respaldo y muestra el backoff y su techo en vivo. |
+| `src/pipeline_texto.py` | Normaliza y tokeniza texto antes de medirlo: minúsculas, sin puntuación y con espacios simples. Concentra la limpieza y la tokenización en una sola función para que no se aplique una y se olvide la otra. |
+| `experimentos/medir_pipeline.py` | Genera tres respuestas reales con el cliente y calcula la coincidencia contra una referencia escrita a mano, sobre texto crudo y sobre texto procesado. |
+| `docs/registro_pipeline_texto.txt` | Registro de esa corrida: consulta, referencia, respuesta, las dos proporciones y el costo acumulado. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -261,6 +268,14 @@ python experimentos/ensayo_rate_limit.py
 
 Provoca un límite de uso real contra Gemini y muestra cómo el backoff espera cada vez más hasta llegar a su techo. **Consume cuota del proveedor**, así que no forma parte de la suite automática.
 
+### 8.5. Medir una respuesta antes y después del pipeline
+
+```bash
+python experimentos/medir_pipeline.py
+```
+
+Genera tres respuestas reales con el cliente, las compara contra una referencia escrita a mano y muestra la misma métrica calculada sobre el texto crudo y sobre el texto procesado. **Consume tres llamadas al proveedor principal** y deja el registro en `docs/registro_pipeline_texto.txt`.
+
 ## 9. Pruebas y validación
 
 El proyecto contempla distintas instancias de validación:
@@ -364,6 +379,31 @@ Ese detalle salió del propio consejo del bloque: si la suite tarda varios segun
 3. **El valor exacto de la espera.** El material advierte no verificar cuánto se espera, porque el jitter es aleatorio. Aquí el jitter se neutraliza con una fixture para poder comprobar la progresión del backoff —1, 2 y 4 segundos, y el techo en 6— y aparte se verifica que la parte aleatoria caiga dentro del rango esperado. Sin neutralizarlo, la prueba de la progresión sería imposible; sin la prueba del rango, el jitter quedaría sin cubrir.
 4. **`registrar_costo` vive en `src/costos.py`.** Se importa en `cliente.py`, así que `cliente.registrar_costo` existe y la interfaz que el checklist nombra se mantiene. El acumulado se lee con `costos.costo_acumulado()` en lugar de un atributo de módulo, y una fixture `autouse` lo reinicia antes y después de cada prueba para que una prueba no contamine a la siguiente.
 
+### 9.7. Efecto del pipeline sobre respuestas reales
+
+Corrida del **2026-10-31** sobre el proveedor principal: tres consultas, cada una con una referencia escrita a mano. La métrica cuenta la proporción de palabras de la referencia que también aparecen en la respuesta.
+
+| Caso | Texto crudo | Texto procesado |
+|---|---:|---:|
+| 1. Qué es Python | 85,7 % | **100 %** |
+| 2. Qué es una lista | 80,0 % | **88,9 %** |
+| 3. Para qué sirve una función | 36,4 % | **36,4 %** |
+
+**El caso 3 es el más honesto de los tres:** el pipeline no cambió nada. La respuesta usó palabras distintas de la referencia —"sirve para agrupar y encapsular instrucciones reutilizables" frente a "recibe parámetros y devuelve un resultado"— y ninguna normalización arregla eso, porque no era un problema de formato sino de contenido.
+
+Los casos 1 y 2 muestran lo contrario: el modelo dijo lo mismo con otra puntuación, y la limpieza recuperó entre 8 y 14 puntos de coincidencia.
+
+**Dos límites de la métrica, verificados en la misma corrida sin llamar a la API:**
+
+| Límite | Comparación | Resultado |
+|---|---|---|
+| Orden de las palabras | "El perro persiguió al gato" frente a "El gato persiguió al perro" | **100 %**, con significados opuestos |
+| Repeticiones | "el gato" frente a "el gato el gato el gato" | **100 %**: se compara por conjuntos |
+
+Ninguno de los dos es un error de implementación: son propiedades del tipo de métrica. El primero se resuelve con criterio humano al leer la respuesta; el segundo, contando repeticiones con `Counter` en lugar de `set`.
+
+El registro completo, con las respuestas textuales, está en `docs/registro_pipeline_texto.txt`. Costo de la corrida: **US$ 0,00019**.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -401,6 +441,23 @@ Ese detalle salió del propio consejo del bloque: si la suite tarda varios segun
 - **Ensayo de rate limit:** se ejecutó contra Gemini, el proveedor de respaldo, porque DeepSeek no limita por minuto. El primer intento falló con un error temporal y el backoff esperó **1,00 s → 2,10 s → 4,07 s**: la progresión 1-2-4 con el jitter visible en los decimales. En una segunda corrida se confirmó el techo: **1,10 s → 2,04 s → 4,01 s → 6,37 s**, es decir, dejó de duplicar al llegar al máximo de 6 s en vez de seguir a 8 y 16. Ambas corridas se interrumpieron, una por consumo de cuota y otra por timeouts encadenados.
 - **Hallazgo (diagnóstico):** el mensaje de error agrupaba el 429 y los 5xx en una misma frase sin el código HTTP, así que no permitía distinguir un límite de uso de una caída del servidor. Se corrigió para que el mensaje incluya el código recibido, en los dos proveedores. Sin ese dato, el ensayo no puede afirmar qué falló: solo que fue un error temporal.
 - **Evidencia:** 133 pruebas unitarias y de comportamiento en verde, ejecutadas en entorno aislado sin alterar la interfaz pública del cliente.
+
+##### Bloque 14: Pruebas unitarias del cliente modular
+
+- **Objetivo:** una suite que cubra el checklist del bloque, función por función, sin tocar la red y sin esperar de verdad.
+- **Implementación:** la suite ya existía de los bloques 12 y 13; el trabajo de este bloque fue verificarla contra el checklist y completar lo que faltaba. Se agregó una prueba de contrato que fija las cuatro funciones públicas, y `pytest.ini` para excluir por defecto el único test que llama al proveedor real.
+- **Hallazgo (cuota):** `test_integracion_real_openrouter` llamaba a OpenRouter en **cada** corrida de la suite y era la causa de que tardara 4,11 s. Quedó marcado como `integracion` y excluido por defecto; se ejecuta a propósito con `python -m pytest -m integracion`. La suite pasó a 0,47 s.
+- **Diferencia con el material:** los archivos viven en `src/` y `tests/` en lugar de la raíz, y `tests/conftest.py` agrega `src/` al `sys.path` para evitar el `ModuleNotFoundError`. Las excepciones propias heredan de `ValueError` y `TimeoutError`, así que las pruebas escritas tal como las plantea el material pasarían igual.
+- **Evidencia:** 133 pruebas en verde, trazabilidad del checklist en la sección 9.6.
+
+##### Bloque 15: Pipeline de limpieza y tokenización de texto
+
+- **Objetivo:** dejar el texto en un formato comparable antes de medir nada, y comprobarlo sobre respuestas reales del cliente.
+- **Implementación:** `src/pipeline_texto.py` con `limpiar_texto`, `tokenizar`, `procesar_texto` y `vectorizar`; `experimentos/medir_pipeline.py` para la corrida con respuestas reales; registro en `docs/registro_pipeline_texto.txt`.
+- **Decisión (limpieza):** la puntuación se **elimina**, no se reemplaza por espacio, así que `"hola,mundo"` queda `"holamundo"`. Se mantiene porque el material usa esa expresión y porque la comparación es por palabras, pero se documenta y se prueba: es una consecuencia del diseño, no un descuido.
+- **Hallazgo:** sobre tres respuestas reales, el pipeline recuperó entre 8 y 14 puntos de coincidencia en dos casos y **ninguno en el tercero**, donde la diferencia era de contenido y no de formato. Ese caso es la mejor evidencia de que la limpieza no arregla el significado.
+- **Límites verificados:** el orden de las palabras y las repeticiones dan 100 % de coincidencia con significados opuestos o distintos. El primero se resuelve leyendo la respuesta; el segundo, con conteo en lugar de conjuntos.
+- **Evidencia:** 21 pruebas nuevas (154 en total), registro de la corrida y costo de US$ 0,00019.
 
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
