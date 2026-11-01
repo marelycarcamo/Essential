@@ -65,7 +65,10 @@ Essential/
 │   ├── Diagrama de flujo para consumir OpenRouter.png
 │   ├── Evidencia_peticion_autenticada_Thunder_Client.png
 │   ├── Evidencia_peticion_evidencia_autenticada_postman.png
-│   └── registro_pipeline_texto.txt
+│   ├── limites_metrica.md
+│   ├── registro_pipeline_texto.txt
+│   ├── resultados_metricas.json
+│   └── revision_manual.json
 ├── notebooks/
 │   └── prueba_banco_prompts.ipynb
 ├── prompts/
@@ -81,6 +84,7 @@ Essential/
 │   ├── consumir_openrouter.py
 │   ├── costos.py
 │   ├── errores.py
+│   ├── metricas.py
 │   ├── parsear_json.py
 │   └── pipeline_texto.py
 ├── tests/
@@ -93,17 +97,20 @@ Essential/
 │   ├── test_costos.py
 │   ├── test_integracion.py
 │   ├── test_main.py
+│   ├── test_metricas.py
 │   ├── test_parsear_json.py
 │   └── test_pipeline_texto.py
 ├── experimentos/
 │   ├── ensayo_rate_limit.py
+│   ├── medir_metricas.py
 │   └── medir_pipeline.py
 ├── .env.example
 ├── .gitignore
 ├── main.py
 ├── pytest.ini
 ├── README.md
-└── requirements.txt
+├── requirements.txt
+└── revision_manual.py
 
 ```
 
@@ -125,6 +132,12 @@ Essential/
 | `pytest.ini` | Excluye por defecto el test que llama al proveedor real, para que la suite no consuma cuota. |
 | `experimentos/ensayo_rate_limit.py` | Provoca un límite de uso real contra el proveedor de respaldo y muestra el backoff y su techo en vivo. |
 | `src/pipeline_texto.py` | Normaliza y tokeniza texto antes de medirlo: minúsculas, sin puntuación y con espacios simples. Concentra la limpieza y la tokenización en una sola función para que no se aplique una y se olvide la otra. |
+| `src/metricas.py` | Calcula precisión, cobertura y F1 comparando dos textos ya normalizados. Cuenta repeticiones con `Counter` y toma el mínimo entre ambos lados, así que una respuesta repetitiva no infla el puntaje. |
+| `experimentos/medir_metricas.py` | Genera una respuesta real por consulta, calcula las tres métricas y guarda los resultados con la respuesta incluida. |
+| `docs/resultados_metricas.json` | Resultado de esa corrida: consulta, respuesta y las tres métricas de cada caso. |
+| `revision_manual.py` | Registro de la revisión cualitativa de 10 casos, con la rúbrica de tres preguntas aplicada a cada uno y su justificación escrita. |
+| `docs/revision_manual.json` | El mismo registro en JSON, generado por `revision_manual.py`. |
+| `docs/limites_metrica.md` | Documento de límites de la métrica: qué mide, modos de falla con un ejemplo concreto de cada uno, muestra revisada y recomendación de uso. |
 | `experimentos/medir_pipeline.py` | Genera tres respuestas reales con el cliente y calcula la coincidencia contra una referencia escrita a mano, sobre texto crudo y sobre texto procesado. |
 | `docs/registro_pipeline_texto.txt` | Registro de esa corrida: consulta, referencia, respuesta, las dos proporciones y el costo acumulado. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
@@ -276,6 +289,14 @@ python experimentos/medir_pipeline.py
 
 Genera tres respuestas reales con el cliente, las compara contra una referencia escrita a mano y muestra la misma métrica calculada sobre el texto crudo y sobre el texto procesado. **Consume tres llamadas al proveedor principal** y deja el registro en `docs/registro_pipeline_texto.txt`.
 
+### 8.6. Medir respuestas con precisión, cobertura y F1
+
+```bash
+python experimentos/medir_metricas.py
+```
+
+Genera una respuesta por consulta, calcula las tres métricas y guarda `docs/resultados_metricas.json` **con la respuesta incluida**, para poder releer los casos bajos sin regenerarlos. Consume una llamada al proveedor por cada caso.
+
 ## 9. Pruebas y validación
 
 El proyecto contempla distintas instancias de validación:
@@ -404,6 +425,72 @@ Ninguno de los dos es un error de implementación: son propiedades del tipo de m
 
 El registro completo, con las respuestas textuales, está en `docs/registro_pipeline_texto.txt`. Costo de la corrida: **US$ 0,00019**.
 
+### 9.8. Precisión, cobertura y F1 sobre respuestas reales
+
+Corrida del **2026-10-31** sobre cinco consultas, cada una con su referencia escrita a mano. Las tres métricas se calculan sobre el texto ya normalizado por el pipeline del Bloque 15.
+
+| # | Consulta | Precisión | Cobertura | F1 |
+|---|---|---:|---:|---:|
+| 1 | Qué es Python | 0,27 | 1,00 | 0,42 |
+| 2 | Cuándo se creó Python | 0,24 | 1,00 | 0,38 |
+| 3 | Qué es una lista | 0,38 | 0,90 | 0,53 |
+| 4 | Para qué sirve una función | 0,14 | 0,25 | **0,18** |
+| 5 | Qué es una variable | 0,39 | 0,82 | 0,53 |
+| | **Promedio** | **0,28** | **0,79** | **0,41** |
+
+**La lectura importante está en la diferencia entre precisión y cobertura.** Cobertura 0,79 contra precisión 0,28: el modelo dice casi todo lo que la referencia esperaba, pero con muchas palabras de más. Pese a la instrucción "responde en una sola oración", las respuestas vinieron largas.
+
+Eso cambia qué métrica mirar: si la referencia es corta y específica, la precisión es la que manda, y aquí es la que está mal.
+
+**Los dos casos que valen la pena leer:**
+
+- **Caso 2 (F1 0,38).** La respuesta fue "Python fue creado por Guido van Rossum a finales de los años 80 y su primera versión se publicó en 1991". Es **correcta**, y su cobertura es 1,00. La precisión la castiga por extensa. Un F1 bajo aquí no significa un error: significa que la respuesta dice más de lo que la referencia pedía.
+- **Caso 4 (F1 0,18).** La respuesta fue "una función sirve para encapsular una tarea o cálculo reutilizable a partir de unas entradas". Habla de lo mismo que la referencia, con otras palabras. Es el límite de los sinónimos, apareciendo en una respuesta que nadie diseñó para ilustrarlo.
+
+**Los tres límites de la métrica, fijados como pruebas:**
+
+| Límite | Comparación | F1 |
+|---|---|---:|
+| Sinónimos | "El auto es veloz" frente a "El vehículo es rápido" | 0,50 |
+| Dato equivocado | "creado en 1991" frente a "creado en 1989" | 0,80 |
+| Negación ausente | "Python no es un lenguaje compilado" frente a "Python es un lenguaje compilado" | 0,91 |
+
+Están en `tests/test_metricas.py` a propósito: si alguien "mejora" la métrica para que el sinónimo dé 1,0, las pruebas fallan y explican por qué no corresponde. La métrica mide **parecido léxico**, no corrección; sirve para decidir qué leer primero, no para aprobar una respuesta sin mirarla.
+
+El detalle completo, con las respuestas textuales, está en `docs/resultados_metricas.json`. Costo de la corrida: **US$ 0,00033**.
+
+> **Nota:** el Bloque 17 extendió la misma corrida a **20 casos** sobre el mismo archivo, para poder elegir una muestra de revisión manual. El resumen y los hallazgos de esa ampliación están en la sección 9.9.
+
+### 9.9. Revisión cualitativa de la muestra (Bloque 17)
+
+La corrida se extendió a **20 consultas** y se revisaron **10 a mano**: los 5 casos con F1 más bajo y los 5 con F1 más alto, excluyendo los del medio.
+
+**Promedio de las 20 respuestas:** F1 **0,55** · precisión **0,43** · cobertura **0,83**. La brecha entre precisión y cobertura se mantiene: el cliente dice casi todo lo que se espera, con muchas palabras de más.
+
+| Consulta | F1 | Corrección factual | Completitud | Contradicción |
+|---|---:|---|---|---|
+| Sigla PEP | 0,13 | **no** | **no** | no |
+| Para qué sirve una función | 0,30 | sí | parcialmente | no |
+| Qué es un bucle for | 0,33 | sí | sí | no |
+| Cómo se abre un archivo | 0,35 | sí | sí | no |
+| Qué es la indentación | 0,36 | sí | sí | no |
+| Qué es PEP 8 | 0,73 | sí | sí | no |
+| Qué es un comentario | 0,78 | sí | sí | no |
+| Qué es Python | 0,79 | sí | sí | no |
+| Quién creó Python | 1,00 | sí | sí | no |
+| Año de la primera versión | 1,00 | sí | sí | no |
+
+**El resultado que importa: 3 de los 5 casos con F1 más bajo eran respuestas correctas y completas.** La métrica no estaba señalando un problema del cliente; estaba señalando que la respuesta era más larga que la referencia.
+
+**Y el caso más bajo de todos engaña en el otro sentido.** La sigla PEP se respondió con el significado del ámbito financiero ("Persona Expuesta Políticamente"), no con "Python Enhancement Proposal". El F1 de 0,13 coincidió con el error, pero por casualidad: reaccionó a que no compartía palabras, no a que el contenido fuera incorrecto.
+
+**Dos modos de falla que no estaban en el material y aparecieron acá:**
+
+1. **El código diluye la precisión.** La respuesta sobre abrir archivos incluía `with open(...)`. Es correcta y más completa que la referencia, pero sus tokens de código no existen en la referencia y bajaron el F1 a 0,35.
+2. **Un F1 perfecto mide acuerdo con la referencia, no verdad.** La respuesta `1991` contra la referencia `1991` da 1,00. Si la referencia estuviera mal escrita, una respuesta errónea habría sacado lo mismo. La métrica compara dos textos humanos; no tiene acceso a la verdad.
+
+Todo quedó documentado en `docs/limites_metrica.md`, con la rúbrica aplicada caso por caso en `revision_manual.py` y `docs/revision_manual.json`.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -458,6 +545,27 @@ El registro completo, con las respuestas textuales, está en `docs/registro_pipe
 - **Hallazgo:** sobre tres respuestas reales, el pipeline recuperó entre 8 y 14 puntos de coincidencia en dos casos y **ninguno en el tercero**, donde la diferencia era de contenido y no de formato. Ese caso es la mejor evidencia de que la limpieza no arregla el significado.
 - **Límites verificados:** el orden de las palabras y las repeticiones dan 100 % de coincidencia con significados opuestos o distintos. El primero se resuelve leyendo la respuesta; el segundo, con conteo en lugar de conjuntos.
 - **Evidencia:** 21 pruebas nuevas (154 en total), registro de la corrida y costo de US$ 0,00019.
+
+##### Bloque 16: Métricas de precisión, cobertura y F1
+
+- **Objetivo:** pasar de "coincide o no" a "cuánto coincide", contando repeticiones en lugar de comparar conjuntos.
+- **Implementación:** `src/metricas.py` con `contar_coincidencias` (intersección de `Counter`, que toma el mínimo de cada palabra), `calcular_precision_cobertura_f1`, `calcular_metricas` (aplica el pipeline del Bloque 15 de punta a punta), `resumir_metricas` y `ordenar_por_f1`. `experimentos/medir_metricas.py` corre cinco consultas reales y guarda `docs/resultados_metricas.json`.
+- **Decisión (validación de entrada):** `contar_coincidencias` rechaza un `str` con `TypeError`. Sin eso, `Counter` cuenta cada carácter y devuelve un número equivocado **sin fallar**, que es la peor combinación posible.
+- **Hallazgo:** el promedio de las cinco respuestas fue **precisión 0,28 y cobertura 0,79**. La brecha indica respuestas completas pero extensas: la instrucción "responde en una sola oración" no se cumplió y la precisión es la que lo delata.
+- **Hallazgo (límites en producción):** un caso correcto quedó con F1 0,38 por ser más largo que la referencia, y otro con F1 0,18 por usar sinónimos. Son los límites del bloque, apareciendo en respuestas que nadie diseñó para ilustrarlos.
+- **Decisión (límites como pruebas):** los tres casos del material —sinónimo, dato equivocado y negación ausente— quedaron como tests. No verifican que la métrica funcione, sino que **siga midiendo lo mismo**: si alguien intenta "arreglarla" para que el sinónimo dé 1,0, la suite lo detiene y explica por qué.
+- **Evidencia:** 18 pruebas nuevas (172 en total), resultados guardados con las respuestas incluidas, costo de US$ 0,00033.
+
+##### Bloque 17: Interpretación cualitativa y límites de la métrica
+
+- **Objetivo:** leer una muestra de las respuestas con una rúbrica fija y dejar por escrito qué no puede medir el pipeline, para que quien lo herede no confíe en el número donde no corresponde.
+- **Implementación:** la corrida se extendió a **20 consultas**; se revisaron **10 a mano** —los 5 con F1 más bajo y los 5 con F1 más alto, sin los del medio— con la rúbrica de corrección factual, completitud y contradicción. El registro vive en `revision_manual.py` y `docs/revision_manual.json`; el documento de límites, en `docs/limites_metrica.md`.
+- **Hallazgo:** **3 de los 5 casos con F1 más bajo eran respuestas correctas y completas.** El número estaba midiendo extensión, no calidad. Con referencias cortas como las de este proyecto, la precisión dice más que el F1: el promedio fue 0,43 de precisión contra 0,83 de cobertura.
+- **Hallazgo (falso negativo):** el único caso realmente incorrecto —la sigla PEP respondida con el significado financiero— tuvo el F1 más bajo de la corrida, 0,13, pero por casualidad: la métrica reaccionó a la falta de palabras en común, no al error de contenido.
+- **Hallazgo nuevo (modo de falla no documentado en el material):** un F1 de 1,00 mide acuerdo con la referencia que escribió una persona, no verdad. Si la referencia está mal, la métrica premia la respuesta equivocada. Se agregó como modo de falla en `docs/limites_metrica.md`.
+- **Hallazgo nuevo (dilución por código):** las respuestas con ejemplos de código meten tokens que no existen en la referencia y bajan la precisión sin que haya error.
+- **Decisión:** la rúbrica se registra en un `.py` y se exporta a JSON con `json.dump`, para que el registro sea legible por una persona y consumible por un programa, sin duplicar la fuente.
+- **Evidencia:** 172 pruebas en verde, 20 respuestas medidas, 10 revisadas a mano, costo acumulado de la corrida US$ 0,00150.
 
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
