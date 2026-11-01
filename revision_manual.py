@@ -1,0 +1,182 @@
+"""Revisión manual de una muestra de respuestas (Bloque 17).
+
+Qué es
+------
+El registro de la revisión cualitativa: diez casos de los veinte medidos en
+``docs/resultados_metricas.json``, elegidos como los cinco con F1 más bajo y los
+cinco con F1 más alto. Revisar solo los peores deja ciegos a los falsos
+positivos, que son los que más confianza indebida generan.
+
+La rúbrica es fija, para que dos revisiones del mismo caso lleguen a un
+resultado parecido:
+
+- ``correccion_factual``: ¿todo dato verificable coincide con la referencia?
+  ``si`` / ``no`` / ``parcialmente``.
+- ``completitud``: ¿cubre todo lo que cubre la referencia? ``si`` / ``no`` /
+  ``parcialmente``.
+- ``contradiccion``: ¿afirma lo contrario de algo en la referencia, aunque sea
+  una sola palabra? ``si`` / ``no``.
+
+``nota`` no es opcional: un "no" sin explicación no sirve cuando se relea el
+archivo en unas semanas.
+
+Cómo se usa
+-----------
+    .\\.venv\\Scripts\\python.exe revision_manual.py
+
+Escribe ``docs/revision_manual.json``. No llama a la API: revisa resultados que
+ya están guardados.
+"""
+
+import json
+from pathlib import Path
+
+RAIZ = Path(__file__).resolve().parent
+RUTA_JSON = RAIZ / "docs" / "revision_manual.json"
+
+REVISION = [
+    {
+        "consulta": "¿Qué significa la sigla PEP? Responde en una sola oración.",
+        "f1": 0.133,
+        "correccion_factual": "no",
+        "completitud": "no",
+        "contradiccion": "no",
+        "nota": (
+            "Responde con el significado del ámbito financiero ('Persona "
+            "Expuesta Políticamente') cuando todas las consultas anteriores son "
+            "sobre Python. El F1 bajo coincide con la respuesta equivocada, "
+            "pero por casualidad: la métrica reaccionó a que no comparte "
+            "palabras, no a que el contenido sea incorrecto."
+        ),
+    },
+    {
+        "consulta": "¿Para qué sirve una función? Responde en una sola oración.",
+        "f1": 0.303,
+        "correccion_factual": "si",
+        "completitud": "parcialmente",
+        "contradiccion": "no",
+        "nota": (
+            "Correcta pero incompleta: habla de encapsular instrucciones "
+            "reutilizables y omite los parámetros y el valor de retorno, que sí "
+            "están en la referencia. Acá el F1 bajo señala algo real, aunque el "
+            "defecto es de cobertura, no de corrección."
+        ),
+    },
+    {
+        "consulta": "¿Qué es un bucle for? Responde en una sola oración.",
+        "f1": 0.333,
+        "correccion_factual": "si",
+        "completitud": "si",
+        "contradiccion": "no",
+        "nota": (
+            "Falsa alarma. La respuesta es correcta, completa y agrega el "
+            "concepto de contador; el F1 de 0.33 se debe solo a que usa más "
+            "palabras que la referencia. Es el caso que hay que leer antes de "
+            "concluir que el cliente falló."
+        ),
+    },
+    {
+        "consulta": "¿Cómo se abre un archivo en Python? Responde en una sola oración.",
+        "f1": 0.353,
+        "correccion_factual": "si",
+        "completitud": "si",
+        "contradiccion": "no",
+        "nota": (
+            "Correcta y más completa que la referencia: agrega el bloque with y "
+            "el encoding. El ejemplo de código mete tokens (open, with, r) que "
+            "no existen en la referencia y bajan la precisión sin que haya "
+            "ningún error en la respuesta."
+        ),
+    },
+    {
+        "consulta": "¿Qué es la indentación en Python? Responde en una sola oración.",
+        "f1": 0.359,
+        "correccion_factual": "si",
+        "completitud": "si",
+        "contradiccion": "no",
+        "nota": (
+            "Correcta y completa: menciona espacios o tabulaciones, bloques y "
+            "jerarquía. El F1 bajo no describe un problema de la respuesta, "
+            "sino de la referencia, que era más corta que lo que la pregunta "
+            "admite."
+        ),
+    },
+    {
+        "consulta": "¿Qué es PEP 8? Responde en una sola oración.",
+        "f1": 0.733,
+        "correccion_factual": "si",
+        "completitud": "si",
+        "contradiccion": "no",
+        "nota": (
+            "Correcta. F1 alto y merecido: el contenido y las palabras "
+            "coinciden con la referencia, y el agregado ('oficial', "
+            "'consistente') no cambia el significado."
+        ),
+    },
+    {
+        "consulta": "¿Qué es un comentario en Python? Responde en una sola oración.",
+        "f1": 0.778,
+        "correccion_factual": "si",
+        "completitud": "si",
+        "contradiccion": "no",
+        "nota": (
+            "Correcta. El F1 alto se sostiene: dice qué es, para qué sirve y "
+            "agrega el símbolo #, que es un dato correcto y verificable."
+        ),
+    },
+    {
+        "consulta": "¿Qué es Python? Responde en una sola oración.",
+        "f1": 0.788,
+        "correccion_factual": "si",
+        "completitud": "si",
+        "contradiccion": "no",
+        "nota": (
+            "Correcta. F1 alto con una respuesta que reordena los mismos "
+            "atributos de la referencia (alto nivel, interpretado, propósito "
+            "general) y agrega uno razonable sobre la sintaxis."
+        ),
+    },
+    {
+        "consulta": "¿Quién creó Python? Responde en una sola oración.",
+        "f1": 1.0,
+        "correccion_factual": "si",
+        "completitud": "si",
+        "contradiccion": "no",
+        "nota": (
+            "F1 perfecto y correcto: la respuesta es idéntica a la referencia. "
+            "El caso no prueba rigor, prueba acuerdo entre dos textos."
+        ),
+    },
+    {
+        "consulta": "¿En qué año se publicó la primera versión de Python? Responde solo con el año.",
+        "f1": 1.0,
+        "correccion_factual": "si",
+        "completitud": "si",
+        "contradiccion": "no",
+        "nota": (
+            "F1 perfecto sobre una respuesta de un solo token. Acá aparece un "
+            "modo de falla que no estaba en el material: la métrica compara "
+            "contra la referencia que yo escribí, así que si la referencia "
+            "estuviera mal, una respuesta errónea igual sacaría 1.0. Un F1 "
+            "perfecto mide acuerdo con la referencia, no verdad."
+        ),
+    },
+]
+
+
+def guardar(revision: list[dict]) -> Path:
+    """Escribe la revisión en JSON. Se llama al correr el archivo."""
+
+    RUTA_JSON.parent.mkdir(parents=True, exist_ok=True)
+    RUTA_JSON.write_text(
+        json.dumps(revision, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    return RUTA_JSON
+
+
+if __name__ == "__main__":
+    ruta = guardar(REVISION)
+    print(f"{len(REVISION)} casos revisados y guardados en {ruta.name}")
+    print(f"Promedio de F1 de la muestra: {sum(c['f1'] for c in REVISION) / len(REVISION):.3f}")

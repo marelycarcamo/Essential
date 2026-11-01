@@ -1,0 +1,142 @@
+[
+  {
+    "consulta": "¿Qué es Python? Responde en una sola oración.",
+    "respuesta": "Python es un lenguaje de programación de alto nivel, interpretado, de propósito general y con una sintaxis clara y legible.",
+    "precision": 0.65,
+    "cobertura": 1.0,
+    "f1": 0.787878787878788
+  },
+  {
+    "consulta": "¿Quién creó Python? Responde en una sola oración.",
+    "respuesta": "Python fue creado por Guido van Rossum.",
+    "precision": 1.0,
+    "cobertura": 1.0,
+    "f1": 1.0
+  },
+  {
+    "consulta": "¿En qué año se publicó la primera versión de Python? Responde solo con el año.",
+    "respuesta": "1991",
+    "precision": 1.0,
+    "cobertura": 1.0,
+    "f1": 1.0
+  },
+  {
+    "consulta": "¿Qué es una lista en Python? Responde en una sola oración.",
+    "respuesta": "Una lista en Python es una colección ordenada y mutable de elementos que puede contener datos de distintos tipos y se define entre corchetes.",
+    "precision": 0.375,
+    "cobertura": 0.9,
+    "f1": 0.5294117647058825
+  },
+  {
+    "consulta": "¿Qué es una tupla en Python? Responde en una sola oración.",
+    "respuesta": "Una tupla en Python es una colección ordenada e inmutable de elementos, definida normalmente entre paréntesis, que puede contener datos de distintos tipos.",
+    "precision": 0.43478260869565216,
+    "cobertura": 1.0,
+    "f1": 0.6060606060606061
+  },
+  {
+    "consulta": "¿Qué diferencia hay entre una lista y una tupla? Responde en una sola oración.",
+    "respuesta": "La diferencia principal es que una lista es mutable y puede modificarse después de crearse, mientras que una tupla es inmutable y no puede alterarse.",
+    "precision": 0.32,
+    "cobertura": 0.8888888888888888,
+    "f1": 0.47058823529411764
+  },
+  {
+    "consulta": "¿Qué es un diccionario en Python? Responde en una sola oración.",
+    "respuesta": "Un diccionario en Python es una estructura de datos mutable que almacena pares clave-valor, donde cada clave única se asocia a un valor para permitir un acceso rápido mediante ella.",
+    "precision": 0.26666666666666666,
+    "cobertura": 0.7272727272727273,
+    "f1": 0.3902439024390244
+  },
+  {
+    "consulta": "¿Qué es una variable? Responde en una sola oración.",
+    "respuesta": "Una variable es un símbolo o nombre que representa un valor que puede cambiar o ser asignado en un contexto matemático, lógico o computacional.",
+    "precision": 0.375,
+    "cobertura": 0.8181818181818182,
+    "f1": 0.5142857142857142
+  },
+  {
+    "consulta": "¿Para qué sirve una función? Responde en una sola oración.",
+    "respuesta": "Una función sirve para encapsular un conjunto de instrucciones reutilizables que realizan una tarea específica y pueden invocarse cuando sea necesario.",
+    "precision": 0.23809523809523808,
+    "cobertura": 0.4166666666666667,
+    "f1": 0.30303030303030304
+  },
+  {
+    "consulta": "¿Qué es un bucle for? Responde en una sola oración.",
+    "respuesta": "Un bucle for es una estructura de control que repite un bloque de instrucciones un número determinado de veces, normalmente mediante un contador o recorriendo una secuencia.",
+    "precision": 0.2222222222222222,
+    "cobertura": 0.6666666666666666,
+    "f1": 0.3333333333333333
+  },
+  {
+    "consulta": "¿Qué es una excepción en Python? Responde en una sola oración.",
+    "respuesta": "Una excepción en Python es un evento que ocurre durante la ejecución de un programa y altera su flujo normal, generalmente para indicar un error que puede capturarse y manejarse mediante bloques como `try` y `except`.",
+    "precision": 0.2777777777777778,
+    "cobertura": 0.8333333333333334,
+    "f1": 0.4166666666666667
+  },
+  {
+    "consulta": "¿Qué hace la función len en Python? Responde en una sola oración.",
+    "respuesta": "La función `len` en Python devuelve el número de elementos (la longitud) de un objeto iterable o contenedor, como una cadena, lista, tupla o diccionario.",
+    "precision": 0.28,
+    "cobertura": 0.7777777777777778,
+    "f1": 0.4117647058823529
+  },
+  {
+    "consulta": "¿Cómo se declara una función en Python? Responde en una sola oración.",
+    "respuesta": "Una función en Python se declara con la palabra clave `def`, seguida del nombre de la función, paréntesis para los parámetros y dos puntos, y luego un bloque de código indentado.",
+    "precision": 0.4838709677419355,
+    "cobertura": 0.9375,
+    "f1": 0.6382978723404255
+  },
+  {
+    "consulta": "¿Qué es PEP 8? Responde en una sola oración.",
+    "respuesta": "PEP 8 es la guía de estilo oficial de Python que establece convenciones para escribir código legible y consistente.",
+    "precision": 0.5789473684210527,
+    "cobertura": 1.0,
+    "f1": 0.7333333333333334
+  },
+  {
+    "consulta": "¿Qué significa la sigla PEP? Responde en una sola oración.",
+    "respuesta": "La sigla PEP puede tener varios significados según el contexto; en el ámbito financiero y de prevención de lavado de dinero, significa “Persona Expuesta Políticamente”.",
+    "precision": 0.08,
+    "cobertura": 0.4,
+    "f1": 0.13333333333333333
+  },
+  {
+    "consulta": "¿Qué es un módulo en Python? Responde en una sola oración.",
+    "respuesta": "Un módulo en Python es un archivo con extensión `.py` que contiene código Python (funciones, clases y variables) y que puede importarse para reutilizarlo en otros programas.",
+    "precision": 0.3333333333333333,
+    "cobertura": 0.9,
+    "f1": 0.48648648648648646
+  },
+  {
+    "consulta": "¿Qué es una clase en Python? Responde en una sola oración.",
+    "respuesta": "Una clase en Python es una plantilla que define atributos y métodos para crear objetos con un estado y comportamiento determinados.",
+    "precision": 0.5714285714285714,
+    "cobertura": 1.0,
+    "f1": 0.7272727272727273
+  },
+  {
+    "consulta": "¿Cómo se abre un archivo en Python? Responde en una sola oración.",
+    "respuesta": "Se abre con la función integrada `open()`, preferiblemente usando un bloque `with`, por ejemplo: `with open(\"archivo.txt\", \"r\", encoding=\"utf-8\") as archivo: contenido = archivo.read()`.",
+    "precision": 0.2727272727272727,
+    "cobertura": 0.5,
+    "f1": 0.3529411764705882
+  },
+  {
+    "consulta": "¿Qué es un comentario en Python? Responde en una sola oración.",
+    "respuesta": "Un comentario en Python es un texto precedido por `#` que el intérprete ignora y que sirve para documentar o explicar el código.",
+    "precision": 0.6363636363636364,
+    "cobertura": 1.0,
+    "f1": 0.7777777777777778
+  },
+  {
+    "consulta": "¿Qué es la indentación en Python? Responde en una sola oración.",
+    "respuesta": "La indentación en Python es el uso de espacios o tabulaciones al inicio de una línea para definir bloques de código y su jerarquía, formando parte obligatoria de su sintaxis.",
+    "precision": 0.23333333333333334,
+    "cobertura": 0.7777777777777778,
+    "f1": 0.35897435897435903
+  }
+]
