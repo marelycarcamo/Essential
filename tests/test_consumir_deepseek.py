@@ -117,11 +117,33 @@ def test_credencial_invalida_lanza_error_autenticacion(monkeypatch, codigo):
         _enviar_con_respuesta(monkeypatch, RespuestaFalsa(codigo))
 
 
-@pytest.mark.parametrize("codigo", [429, 500, 502, 503], ids=["429", "500", "502", "503"])
-def test_falla_momentanea_lanza_error_temporal_con_el_codigo(monkeypatch, codigo):
-    """El mensaje debe incluir el código: 429 y 5xx no son el mismo diagnóstico."""
-    with pytest.raises(cd.ErrorTemporal, match=str(codigo)):
+def test_limite_de_uso_lanza_su_propia_excepcion(monkeypatch):
+    """Un 429 significa "bajá el ritmo", no "el servidor se cayó"."""
+    with pytest.raises(cd.ErrorLimiteDeUso, match="429"):
+        _enviar_con_respuesta(monkeypatch, RespuestaFalsa(429))
+
+
+@pytest.mark.parametrize("codigo", [500, 502, 503], ids=["500", "502", "503"])
+def test_caida_del_servidor_lanza_error_temporal_sin_marcarla_como_limite(
+    monkeypatch, codigo
+):
+    """El mensaje lleva el código, y no se confunde con un límite de uso."""
+    with pytest.raises(cd.ErrorTemporal, match=str(codigo)) as info:
         _enviar_con_respuesta(monkeypatch, RespuestaFalsa(codigo))
+
+    assert not isinstance(info.value, cd.ErrorLimiteDeUso)
+
+
+def test_el_limite_de_uso_sigue_siendo_capturable_como_error_temporal(monkeypatch):
+    """Quien ya reintenta con ``except ErrorTemporal`` no tiene que cambiar nada."""
+    with pytest.raises(cd.ErrorTemporal):
+        _enviar_con_respuesta(monkeypatch, RespuestaFalsa(429))
+
+
+def test_el_limite_de_uso_es_capturable_como_timeout(monkeypatch):
+    """La herencia de ``TimeoutError`` se mantiene, para el código que ya existía."""
+    with pytest.raises(TimeoutError):
+        _enviar_con_respuesta(monkeypatch, RespuestaFalsa(429))
 
 
 def test_error_http_no_reintentable_sigue_siendo_runtimeerror(monkeypatch):
