@@ -125,7 +125,7 @@ Essential/
 | `src/consumir_openrouter.py` | Prepara las solicitudes, consulta la API y extrae las respuestas. |
 | `src/consumir_gemini.py` | Proveedor de respaldo: arma, envía y extrae la respuesta de la API de Gemini con el mismo contrato de llamada que DeepSeek. |
 | `src/cliente.py` | Expone `consultar_modelo()` como única función pública: arma la petición, la envía con reintento automático y devuelve el texto. |
-| `src/errores.py` | Define las excepciones propias del cliente y su relación con las excepciones estándar de Python. |
+| `src/errores.py` | Define las excepciones propias del cliente y su relación con las excepciones estándar de Python, incluida una específica para el límite de uso del proveedor. |
 | `src/costos.py` | Calcula el costo de cada operación a partir de los tokens informados por el proveedor, con tarifas por componente y distinción entre hora punta y hora valle, y mantiene el acumulado de la sesión. |
 | `src/parsear_json.py` | Procesa las respuestas JSON y comprueba las claves esperadas. |
 | `tests/conftest.py` | Agrega `src/` al `sys.path` y reinicia el acumulado de costo antes y después de cada prueba. |
@@ -567,6 +567,14 @@ Todo quedó documentado en `docs/limites_metrica.md`, con la rúbrica aplicada c
 - **Decisión:** la rúbrica se registra en un `.py` y se exporta a JSON con `json.dump`, para que el registro sea legible por una persona y consumible por un programa, sin duplicar la fuente.
 - **Evidencia:** 172 pruebas en verde, 20 respuestas medidas, 10 revisadas a mano, costo acumulado de la corrida US$ 0,00150.
 
+##### Mejora posterior al Gate 1: excepción propia para el límite de uso (2026-11-02)
+
+- **Origen:** la devolución del Gate 1 pidió "aislar excepciones específicas de red (como `RateLimitError`)". Hasta este cambio, un 429 y un 5xx se levantaban como el mismo `ErrorTemporal`.
+- **Implementación:** `ErrorLimiteDeUso` hereda de `ErrorTemporal`, así que todo `except ErrorTemporal` que ya existía sigue funcionando sin cambios. Los dos proveedores levantan esa subclase **solo** en 429; los 5xx siguen siendo `ErrorTemporal`.
+- **Por qué importa:** un 429 pide bajar el ritmo; un 5xx no se arregla esperando distinto. Sin la subclase, quien consume el cliente tenía que leer el texto del mensaje para distinguirlos.
+- **Cobertura:** cuatro pruebas por proveedor: la subclase en 429, los 5xx sin confundirse con el límite, y la compatibilidad con `except ErrorTemporal` y `except TimeoutError`.
+- **Deuda pendiente:** respetar el encabezado `Retry-After` cuando el proveedor lo envíe, en lugar de la espera calculada por el backoff. Queda anotado en la sección 11.
+
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
 - Ampliar el conjunto de comentarios de prueba.
@@ -577,6 +585,7 @@ Entre las posibles mejoras se encuentran:
 - Medir los costos asociados al consumo de la API.
 - Evitar la duplicación del banco de prompts entre los distintos componentes del proyecto.
 - Permitir que el cliente alterne entre proveedores sin modificar el código que lo consume.
+- Respetar el encabezado `Retry-After` del proveedor cuando responde 429, en lugar de la espera calculada por el backoff.
 - Modelar los feriados del proveedor al calcular la tarifa de hora punta.
 - Registrar el costo en un archivo o base de datos para conservarlo entre ejecuciones.
 
