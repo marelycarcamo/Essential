@@ -21,7 +21,7 @@ import os
 import requests
 from dotenv import load_dotenv
 
-from errores import ErrorAutenticacion, ErrorTemporal
+from errores import ErrorAutenticacion, ErrorLimiteDeUso, ErrorTemporal
 
 load_dotenv()
 
@@ -129,7 +129,13 @@ def enviar_peticion(url, body):
             "Credencial inválida o sin permiso. Revisa tu GEMINI_API_KEY."
         )
 
-    if respuesta.status_code == 429 or respuesta.status_code >= 500:
+    if respuesta.status_code == 429:
+        raise ErrorLimiteDeUso(
+            "Gemini devolvió HTTP 429: límite de uso alcanzado. "
+            "Hay que bajar el ritmo antes de reintentar."
+        )
+
+    if respuesta.status_code >= 500:
         # El código va en el mensaje a propósito: "no pudo procesar" no distingue
         # un límite de uso (429) de una caída del servidor (5xx). Se reintentan
         # igual, pero saber cuál fue cambia el diagnóstico.
