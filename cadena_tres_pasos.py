@@ -18,12 +18,25 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+# --- Wrapper propio DeepSeek (fallback sin tiktoken) ---
+from src.deepseek_wrapper import DeepSeekWrapper
+
 load_dotenv()
 
-# --- Modelo ---
+# --- Modelo principal ---
 # Temperature=0 para consistencia en pasos de extracción/resumen;
 # si quisiéramos creatividad en el formato, podría subirse.
 modelo = ChatGoogleGenerativeAI(model="gemini-3.8-flash", temperature=0)
+
+# --- Modelo de respaldo (DeepSeek) ---
+# Se instancia solo si la clave está disponible; así no rompe el script
+# si el .env no tiene DEEPSEEK_API_KEY.
+try:
+    modelo_deepseek = DeepSeekWrapper()
+    TIENE_DEEPSEEK = True
+except RuntimeError:
+    modelo_deepseek = None
+    TIENE_DEEPSEEK = False
 
 # --- Entrada real de ALESSIA (texto largo, no trivial) ---
 # Esto describe el pipeline RAG que ALESSIA construyó; se toma como caso
@@ -107,7 +120,15 @@ def invocar_con_conmutador(modelo_principal, modelos_alternativos, inputs):
 
 # --- Ejecución ---
 if __name__ == "__main__":
-    cadena = construir_cadena(modelo)
-    resultado = cadena.invoke({"texto": texto_entrada})
+    if TIENE_DEEPSEEK:
+        # Conmutador: si Gemini falla (503, 429), DeepSeek toma el relevo
+        # automáticamente antes de rendirse.
+        resultado = invocar_con_conmutador(
+            modelo, [modelo_deepseek], {"texto": texto_entrada}
+        )
+    else:
+        # Sin DeepSeek configurado, corre contra Gemini solo
+        cadena = construir_cadena(modelo)
+        resultado = cadena.invoke({"texto": texto_entrada})
     print("=== Resultado final de la chain (3 pasos) ===")
     print(resultado)
