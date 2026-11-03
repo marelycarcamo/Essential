@@ -84,6 +84,27 @@ def construir_cadena(modelo):
     )
 
 
+def invocar_con_conmutador(modelo_principal, modelos_alternativos, inputs):
+    """Intenta invocar la chain primero con ``modelo_principal``, y si falla
+    (lanza cualquier excepción), intenta automáticamente con cada modelo de
+    ``modelos_alternativos`` en el orden que se proporcionen.
+
+    Útil cuando un modelo está saturado (503, 429) y se quiere probar con
+    otro proveedor antes de rendirse.
+
+    Retorna el resultado de la primera invocación exitosa, o lanza
+    ``RuntimeError`` si ningún modelo pudo responder.
+    """
+    candidatos = [modelo_principal] + list(modelos_alternativos or [])
+    for modelo in candidatos:
+        try:
+            cadena = construir_cadena(modelo)
+            return cadena.invoke(inputs)
+        except Exception:
+            continue
+    raise RuntimeError("Ningún modelo pudo responder la cadena")
+
+
 # --- Ejecución ---
 if __name__ == "__main__":
     cadena = construir_cadena(modelo)

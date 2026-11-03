@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage
 
-from cadena_tres_pasos import construir_cadena
+from cadena_tres_pasos import construir_cadena, invocar_con_conmutador
 
 
 def test_la_chain_llama_el_modelo_tres_veces():
@@ -64,3 +64,37 @@ def test_el_paso_3_recibe_el_resumen_del_paso_2():
 
     tercer_prompt = modelo_falso.call_args_list[2].args[0]
     assert "resumen del paso 2" in tercer_prompt.text
+
+
+def test_el_conmutador_pasa_al_siguiente_modelo_si_el_principal_falla():
+    """Si el modelo principal falla, intenta el siguiente hasta que uno funcione."""
+    modelo_principal = MagicMock()
+    modelo_principal.side_effect = RuntimeError("503 unavailable")
+    modelo_fallo = MagicMock()
+    modelo_fallo.side_effect = RuntimeError("503 unavailable")
+    modelo_ok = MagicMock()
+    modelo_ok.side_effect = [
+        AIMessage(content="punto 1\npunto 2\npunto 3"),
+        AIMessage(content="texto simplificado"),
+        AIMessage(content="- viñeta 1\n- viñeta 2"),
+    ]
+
+    resultado = invocar_con_conmutador(
+        modelo_principal, [modelo_fallo, modelo_ok], {"texto": "x"}
+    )
+
+    assert "viñeta" in resultado
+    assert modelo_principal.call_count == 1
+    assert modelo_fallo.call_count == 1
+    assert modelo_ok.call_count == 3
+
+
+def test_el_conmutador_lanza_si_ningun_modelo_funciona():
+    """Si todos los modelos fallan, lanza RuntimeError."""
+    modelo_principal = MagicMock()
+    modelo_principal.side_effect = RuntimeError("503")
+    modelo_fallo = MagicMock()
+    modelo_fallo.side_effect = RuntimeError("503")
+
+    with pytest.raises(RuntimeError):
+        invocar_con_conmutador(modelo_principal, [modelo_fallo], {"texto": "x"})
