@@ -28,7 +28,11 @@ Que un paso que falla no tumbe el flujo:
    techo, y el ``timeout=10`` del material habría dejado el fallo a merced de
    los reintentos.
 2. **``with_fallbacks``.** Si la cadena principal revienta por un fallo del
-   proveedor, se reintenta con el modelo de respaldo.
+   proveedor, se reintenta con el modelo de respaldo. El principal es
+   **DeepSeek** y el respaldo **Gemini**, no al revés: el material del curso
+   usa Gemini, pero se cae seguido y la medición lo confirma — la ruta
+   avanzada devuelve 504 sin completar, mientras DeepSeek la resuelve en
+   21,5 s. Es el mismo orden que fija ``docs/decision-arquitectura.md``.
 3. **Respuesta degradada.** Si tampoco hay respaldo, se devuelve un mensaje
    honesto en vez de una excepción.
 
@@ -292,7 +296,6 @@ def construir_cadena_con_enrutamiento(
             nivel=construir_paso_nivel(modelo)
         )
     else:
-        logger.info("Nivel recibido como parámetro: %s", nivel)
         paso_nivel = _paso_nivel_fijo(nivel)
 
     return paso_nivel | construir_bifurcacion(rutas)
@@ -582,23 +585,34 @@ def main() -> int:
 
     nivel = sys.argv[1] if len(sys.argv) > 1 else None
 
-    clave = os.getenv("GEMINI_API_KEY")
-    if not clave:
+    # Se registra aquí, donde el nivel entra de verdad. Dentro de la cadena se
+    # registraría dos veces: la cadena segura arma la principal y el respaldo.
+    if nivel is None:
+        logger.info("Nivel: lo decide el modelo.")
+    else:
+        logger.info("Nivel solicitado: %s", nivel)
+
+    clave_deepseek = os.getenv("DEEPSEEK_API_KEY")
+    if not clave_deepseek:
         logger.error(
-            "Falta GEMINI_API_KEY en el entorno. Se espera en el .env del "
-            "proyecto; sin ella no hay llamada al modelo."
+            "Falta DEEPSEEK_API_KEY: es el proveedor principal de esta cadena. "
+            "Se espera en el .env del proyecto."
         )
         return 1
 
-    modelo = construir_modelo_gemini(clave)
+    # DeepSeek primero: es el proveedor que responde. ``DeepSeekWrapper`` no es
+    # un ``Runnable``, así que pasa por el adaptador antes de entrar a la cadena.
+    principal: Runnable = adaptar_respaldo(DeepSeekWrapper())
 
     respaldo: Runnable | None = None
-    try:
-        respaldo = adaptar_respaldo(DeepSeekWrapper())
-    except RuntimeError as error:
-        logger.info("Sin modelo de respaldo (%s).", error)
+    clave_gemini = os.getenv("GEMINI_API_KEY")
 
-    cadena = construir_cadena_segura(modelo, respaldo, nivel)
+    if clave_gemini:
+        respaldo = construir_modelo_gemini(clave_gemini)
+    else:
+        logger.info("Sin proveedor de respaldo: no hay GEMINI_API_KEY.")
+
+    cadena = construir_cadena_segura(principal, respaldo, nivel)
 
     material = cadena.invoke({"texto": TEXTO_DE_EJEMPLO})
 
