@@ -45,6 +45,11 @@ import unicodedata
 import requests
 from dotenv import load_dotenv
 from google.genai.errors import APIError as ErrorDelProveedor
+from langchain_core.exceptions import (
+    ModelAPIError,
+    ModelAuthenticationError,
+    ModelRateLimitError,
+)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable, RunnableLambda
@@ -62,12 +67,26 @@ logger = logging.getLogger(__name__)
 # Solo entran aquí los fallos del proveedor: saturación, cuota, red caída.
 # Un KeyError o un TypeError significan que la cadena está mal armada, y en
 # ese caso hay que verlos, no rotar de modelo hasta que el mensaje se pierda.
+#
+# Ojo con las dos familias: LangChain **normaliza** una parte de los errores de
+# Google en sus propias clases, que no heredan de ``google.genai.APIError``. El
+# 429 es el caso que nos mordió: llegaba como ``GoogleRateLimitError``, no
+# estaba en la lista y se escapaba del respaldo.
 ERRORES_DE_PROVEEDOR = (
-    ErrorDelProveedor,
+    ErrorDelProveedor,         # 5xx tal cual vienen de google.genai
+    ModelAPIError,             # 5xx normalizados por LangChain
+    ModelRateLimitError,       # 429: se agotó la cuota, no el servicio
+    ModelAuthenticationError,  # clave inválida: el respaldo es la salida
     requests.RequestException,
     TimeoutError,
     ConnectionError,
 )
+
+# Deliberadamente **fuera** de la lista: ``ModelNotFoundError`` (un 404 es un
+# modelo mal escrito en la configuración, como el ``gemini-3-flash`` que nadie
+# notó durante un bloque entero) y ``ModelInvalidRequestError`` (un 400 es
+# nuestro prompt mal armado). Rotar de modelo ante esos dos esconde el error en
+# vez de arreglarlo.
 
 
 # --------------------------------------------------------------------------

@@ -11,21 +11,35 @@ Cubre dos cosas que se rompen sin avisar:
 Todo con modelos simulados: ninguna prueba toca la red ni consume cuota.
 """
 
+import logging
+
 import pytest
 import requests
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage
+from langchain_google_genai.chat_models import (
+    GoogleModelNotFoundError,
+    GoogleRateLimitError,
+)
 
 from enrutamiento import (
+    MAXIMO_PALABRAS,
     PLANTILLA_AVANZADA,
     PLANTILLA_INICIAL,
     PLANTILLA_INTERMEDIA,
+    REINTENTOS_POR_DEFECTO,
     RESPUESTA_GENERICA,
+    SECCIONES_OBLIGATORIAS,
+    TIEMPO_MAXIMO_POR_DEFECTO,
+    adaptar_respaldo,
     construir_cadena_con_enrutamiento,
     construir_cadena_segura,
+    construir_modelo_gemini,
     construir_rutas,
     interpretar_nivel,
+    verificar_material,
 )
 
 
@@ -184,3 +198,266 @@ def test_un_error_de_programacion_no_se_confunde_con_una_caida():
 
     with pytest.raises(KeyError):
         cadena.invoke({"texto": "documento"})
+
+
+# --------------------------------------------------------------------------
+# El nivel como parámetro: determinismo sin gastar una llamada
+# --------------------------------------------------------------------------
+
+
+def test_con_nivel_explicito_no_se_clasifica():
+    rutas = _rutas_falsas()
+    modelo = _modelo_con([])  # sin respuestas: si clasificara, reventaría
+
+    resultado = construir_cadena_con_enrutamiento(
+        modelo, rutas, nivel="avanzado"
+    ).invoke({"texto": "documento"})
+
+    assert resultado == "material avanzado"
+    assert modelo.call_count == 0
+
+
+def test_un_nivel_invalido_cae_en_el_default_y_no_rompe():
+    rutas = _rutas_falsas()
+
+    resultado = construir_cadena_con_enrutamiento(
+        _modelo_con([]), rutas, nivel="experto"
+    ).invoke({"texto": "documento"})
+
+    assert resultado == "material intermedio"
+    assert rutas["intermedio"].call_count == 1
+
+
+def test_un_nivel_invalido_deja_aviso_en_el_log(caplog):
+    with caplog.at_level(logging.WARNING, logger="enrutamiento"):
+        construir_cadena_con_enrutamiento(
+            _modelo_con([]), _rutas_falsas(), nivel="experto"
+        ).invoke({"texto": "documento"})
+
+    assert "experto" in caplog.text
+
+
+def test_la_cadena_segura_propaga_el_nivel_al_respaldo():
+    modelo_principal = MagicMock()
+    modelo_principal.side_effect = requests.exceptions.ConnectionError("503")
+
+    modelo_respaldo = _modelo_con(["material del respaldo"])
+
+    cadena = construir_cadena_segura(
+        modelo_principal, modelo_respaldo, nivel="inicial"
+    )
+
+    assert cadena.invoke({"texto": "documento"}) == "material del respaldo"
+    # Una sola llamada: el respaldo no tuvo que clasificar el documento.
+    assert modelo_respaldo.call_count == 1
+
+
+def test_adaptar_respaldo_entrega_un_mensaje_y_no_un_objeto_crudo():
+    """Regresión de la corrida real: el respaldo devolvía SimpleNamespace.
+
+    ``StrOutputParser`` solo acepta texto o ``BaseMessage``, así que el camino
+    de emergencia reventaba dentro del propio mecanismo de emergencia.
+    """
+
+    class ModeloCrudo:
+        def invoke(self, entrada):
+            return SimpleNamespace(content="material del respaldo")
+
+    cadena = construir_cadena_con_enrutamiento(
+        adaptar_respaldo(ModeloCrudo()), nivel="inicial"
+    )
+
+    assert cadena.invoke({"texto": "documento"}) == "material del respaldo"
+
+
+def test_el_fallo_del_principal_queda_registrado(caplog):
+    """``with_fallbacks`` reintenta en silencio: el log tiene que decirlo."""
+
+    modelo_principal = MagicMock()
+    modelo_principal.side_effect = requests.exceptions.ConnectionError("503")
+
+    cadena = construir_cadena_segura(
+        modelo_principal, _modelo_con(["material del respaldo"]), nivel="inicial"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="enrutamiento"):
+        assert cadena.invoke({"texto": "documento"}) == "material del respaldo"
+
+    assert "modelo principal" in caplog.text
+    assert "ConnectionError" in caplog.text
+
+
+def test_un_429_de_cuota_activa_el_respaldo():
+    """Regresión del 2026-11-14: el 429 se escapaba de la cadena.
+
+    LangChain normaliza el 429 de Google en ``GoogleRateLimitError``, que no
+    hereda de ``google.genai.APIError``. Era el único error de proveedor que no
+    estaba en la lista, y es el más frecuente de todos.
+    """
+
+    modelo_principal = MagicMock()
+    modelo_principal.side_effect = GoogleRateLimitError(
+        "429 cuota diaria agotada"
+    )
+
+    cadena = construir_cadena_segura(
+        modelo_principal, _modelo_con(["material del respaldo"]), nivel="inicial"
+    )
+
+    assert cadena.invoke({"texto": "documento"}) == "material del respaldo"
+
+
+def test_un_404_de_configuracion_no_se_disfraza_de_caida():
+    """Un modelo mal escrito tiene que doler, no rotar en silencio."""
+
+    modelo_principal = MagicMock()
+    modelo_principal.side_effect = GoogleModelNotFoundError(
+        "404 modelo inexistente"
+    )
+
+    cadena = construir_cadena_segura(
+        modelo_principal, _modelo_con(["material del respaldo"]), nivel="inicial"
+    )
+
+    with pytest.raises(GoogleModelNotFoundError):
+        cadena.invoke({"texto": "documento"})
+
+
+# --------------------------------------------------------------------------
+# Verificación del material: el contrato, medido
+# --------------------------------------------------------------------------
+
+DOCUMENTO = (
+    "ALESSIA es un chatbot RAG construido con Python y LangGraph.\n"
+    "Divide los PDFs en fragmentos con solapamiento y los guarda en un "
+    "índice vectorial."
+)
+
+MATERIAL_VALIDO = (
+    "**Objetivo:** entender el pipeline de ALESSIA.\n"
+    "**Conceptos:**\n"
+    "1. **Fragmentación con solapamiento:** como cortar un libro en hojas que "
+    "comparten un párrafo.\n"
+    "> Divide los PDFs en fragmentos con solapamiento\n"
+    "2. **Índice vectorial:** como el lomo que dice en qué página va cada "
+    "tema.\n"
+    "> ALESSIA es un chatbot RAG construido con Python y LangGraph\n"
+    "**Ejercicio:** dibuja el pipeline en cuatro cajas.\n"
+)
+
+
+def test_verificar_material_aprueba_uno_bien_formado():
+    revision = verificar_material(MATERIAL_VALIDO, DOCUMENTO)
+
+    assert revision.aprueba
+    assert revision.secciones_faltantes == ()
+    assert revision.citas_invalidas == ()
+    assert revision.palabras > 0
+
+
+@pytest.mark.parametrize("seccion", SECCIONES_OBLIGATORIAS)
+def test_verificar_material_detecta_cada_seccion_faltante(seccion):
+    sin_seccion = "\n".join(
+        linea
+        for linea in MATERIAL_VALIDO.splitlines()
+        if not linea.lower().lstrip("*# ").startswith(seccion)
+    )
+
+    revision = verificar_material(sin_seccion, DOCUMENTO)
+
+    assert seccion in revision.secciones_faltantes
+    assert not revision.aprueba
+
+
+def test_verificar_material_detecta_una_cita_inventada():
+    """Una cita que no está en el documento es la alucinación más barata de ver."""
+
+    material = MATERIAL_VALIDO.replace(
+        "ALESSIA es un chatbot RAG construido con Python y LangGraph",
+        "ALESSIA usa GPT-4 y no tiene pruebas",
+    )
+
+    revision = verificar_material(material, DOCUMENTO)
+
+    assert len(revision.citas_invalidas) == 1
+    assert "GPT-4" in revision.citas_invalidas[0]
+    assert not revision.aprueba
+
+
+def test_verificar_material_acepta_una_cita_que_cruza_un_salto_de_linea():
+    """Sin colapsar espacios, una cita correcta se marcaría como inventada."""
+
+    material = MATERIAL_VALIDO.replace(
+        "Divide los PDFs en fragmentos con solapamiento",
+        "Python y LangGraph. Divide los PDFs",
+    )
+
+    revision = verificar_material(material, DOCUMENTO)
+
+    assert revision.citas_invalidas == ()
+
+
+def test_verificar_material_no_cuenta_las_citas_como_palabras_propias():
+    cita_larga = "> " + " ".join(["palabra"] * 50) + "\n"
+
+    con_cita = verificar_material(MATERIAL_VALIDO + cita_larga, DOCUMENTO)
+    sin_cita = verificar_material(MATERIAL_VALIDO, DOCUMENTO)
+
+    assert con_cita.palabras == sin_cita.palabras
+
+
+def test_verificar_material_rechaza_un_material_demasiado_largo():
+    relleno = " ".join(["palabra"] * (MAXIMO_PALABRAS + 5))
+    material = MATERIAL_VALIDO + f"\n{relleno}\n"
+
+    revision = verificar_material(material, DOCUMENTO)
+
+    assert revision.palabras > MAXIMO_PALABRAS
+    assert not revision.aprueba
+
+
+@pytest.mark.parametrize(
+    "plantilla",
+    [PLANTILLA_INICIAL, PLANTILLA_INTERMEDIA, PLANTILLA_AVANZADA],
+    ids=["inicial", "intermedia", "avanzada"],
+)
+def test_cada_plantilla_pide_el_formato_y_la_cita(plantilla):
+    """El contrato vive en un solo sitio; las tres rutas lo heredan."""
+
+    texto = plantilla.template.lower()
+
+    for seccion in SECCIONES_OBLIGATORIAS:
+        assert f"**{seccion}:" in texto
+
+    assert "cita literal" in texto
+
+
+# --------------------------------------------------------------------------
+# Configuración del modelo: el techo tiene que ser el que dice ser
+# --------------------------------------------------------------------------
+
+
+def test_el_modelo_queda_sin_reintentos_ocultos(monkeypatch):
+    """Regresión del 2026-11-14: con ``max_retries=6`` el techo era timeout × 7.
+
+    Se midió una llamada de 787 s con ``timeout=240``. El número que se lee en
+    la configuración tiene que ser el que de verdad se aplica.
+    """
+
+    monkeypatch.delenv("LLM_MAX_REINTENTOS", raising=False)
+    monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
+
+    modelo = construir_modelo_gemini(clave="clave-de-prueba")
+
+    assert modelo.max_retries == REINTENTOS_POR_DEFECTO == 0
+    assert modelo.timeout == TIEMPO_MAXIMO_POR_DEFECTO
+
+
+def test_el_techo_del_modelo_se_puede_configurar(monkeypatch):
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "15")
+    monkeypatch.setenv("LLM_MAX_REINTENTOS", "1")
+
+    modelo = construir_modelo_gemini(clave="clave-de-prueba")
+
+    assert modelo.timeout == 15
+    assert modelo.max_retries == 1
