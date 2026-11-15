@@ -335,7 +335,14 @@ def configurar_registro() -> None:
 
     # Subir el nivel global también sube el de las librerías: httpx y el SDK de
     # Google registran cada petición en INFO y llenan la salida de ruido ajeno.
-    for ruidoso in ("httpx", "httpcore", "google_genai", "google.auth", "urllib3"):
+    for ruidoso in (
+        "httpx",
+        "httpcore",
+        "google_genai",
+        "google.auth",
+        "urllib3",
+        "openai",
+    ):
         logging.getLogger(ruidoso).setLevel(logging.WARNING)
 
 
