@@ -19,3 +19,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Salida del agente: materiales que genera y guarda con aprobación humana
+material_generado/
