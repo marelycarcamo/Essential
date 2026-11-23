@@ -21,6 +21,7 @@ from langchain_core.embeddings import Embeddings
 
 from indexar_corpus import (
     DIRECTORIO_CORPUS,
+    MINIMO_UTIL,
     ErrorCorpus,
     abrir_indice,
     cargar_documentos,
@@ -129,12 +130,73 @@ def test_partir_documentos_respeta_el_tamano_maximo():
     largo = "palabra " * 400
     documento = Document(page_content=largo, metadata={"fuente": "largo.md"})
 
-    fragmentos = partir_documentos([documento], tamano=200, solapamiento=0)
+    fragmentos = partir_documentos([documento], tamano=200, solapamiento=0, minimo_util=0)
 
     assert len(fragmentos) > 1
     # El splitter recorta espacios en los bordes, así que el límite se cumple
     # con holgura; lo que se verifica es que no devuelva el documento entero.
     assert all(len(fragmento.page_content) <= 200 for fragmento in fragmentos)
+
+
+def test_fusiona_un_fragmento_corto_con_el_anterior():
+    documentos = [
+        Document(page_content="Primer párrafo completo y suficientemente largo " * 4, metadata={"fuente": "a.md"}),
+        Document(page_content="Cola corta.", metadata={"fuente": "a.md"}),
+    ]
+
+    fragmentos = partir_documentos(documentos, tamano=400, solapamiento=0, minimo_util=120)
+
+    assert len(fragmentos) == 1
+    assert "Cola corta." in fragmentos[0].page_content
+
+
+def test_no_fusiona_fragmentos_de_documentos_distintos():
+    documentos = [
+        Document(page_content="Documento uno con texto suficiente.", metadata={"fuente": "a.md"}),
+        Document(page_content="Corto.", metadata={"fuente": "b.md"}),
+    ]
+
+    fragmentos = partir_documentos(documentos, tamano=400, solapamiento=0, minimo_util=120)
+
+    # El fragmento corto abre su propio documento y no tiene a quién unirse
+    # hacia adelante, así que se conserva: fusionarlo mezclaría dos fuentes y la
+    # cita dejaría de ser inequívoca.
+    assert len(fragmentos) == 2
+    assert {f.metadata["fuente"] for f in fragmentos} == {"a.md", "b.md"}
+
+
+def test_no_fusiona_si_supera_el_tope():
+    # El tope es tamano * 1.5 = 600: 600 + 11 caracteres de la cola lo pasa.
+    documentos = [
+        Document(page_content="x" * 600, metadata={"fuente": "a.md"}),
+        Document(page_content="Cola corta.", metadata={"fuente": "a.md"}),
+    ]
+
+    fragmentos = partir_documentos(documentos, tamano=400, solapamiento=0, minimo_util=120)
+
+    assert len(fragmentos) == 2
+
+
+def test_fusiona_el_titulo_inicial_hacia_adelante():
+    documentos = [
+        Document(
+            page_content="# Título del documento\n\nPrimer párrafo con contenido real y suficiente largo.",
+            metadata={"fuente": "a.md"},
+        )
+    ]
+
+    fragmentos = partir_documentos(documentos, tamano=60, solapamiento=0, minimo_util=45)
+
+    assert fragmentos[0].page_content.startswith("# Título del documento")
+    assert "Primer párrafo" in fragmentos[0].page_content
+
+
+def test_el_corpus_real_no_deja_fragmentos_huerfanos():
+    documentos = cargar_documentos(DIRECTORIO_CORPUS)
+
+    fragmentos = partir_documentos(documentos)
+
+    assert min(len(f.page_content) for f in fragmentos) >= MINIMO_UTIL
 
 
 def test_partir_documentos_no_pierde_texto():

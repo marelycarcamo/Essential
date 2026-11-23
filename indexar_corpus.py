@@ -63,6 +63,15 @@ VARIABLE_CLAVE = "GEMINI_API_KEY"
 TAMANO_CHUNK = 400
 SOLAPAMIENTO = 60
 
+# Un fragmento por debajo de este largo no se sostiene solo: suele ser la cola de
+# un párrafo largo ("incorrecto es peor que ningún material."). Ocupa un lugar
+# entre los candidatos de la recuperación y, al no tener contexto propio, nunca
+# es el fragmento que responde; en el mejor caso desplaza a uno que sí. Por eso
+# se fusiona con el fragmento anterior del mismo documento, sin pasar del tope
+# de fusión: un fragmento de 900 caracteres volvería a mezclar dos temas.
+MINIMO_UTIL = 120
+FACTOR_FUSION = 1.5
+
 
 class ErrorCorpus(RuntimeError):
     """El corpus no existe, está vacío o no se puede leer."""
@@ -104,6 +113,7 @@ def partir_documentos(
     documentos: list[Document],
     tamano: int = TAMANO_CHUNK,
     solapamiento: int = SOLAPAMIENTO,
+    minimo_util: int = MINIMO_UTIL,
 ) -> list[Document]:
     """Parte los documentos en fragmentos, conservando ``fuente`` en cada uno.
 
@@ -111,6 +121,8 @@ def partir_documentos(
         documentos: documentos completos.
         tamano: tamaño máximo del fragmento, en caracteres.
         solapamiento: caracteres que se repiten entre fragmentos contiguos.
+        minimo_util: largo bajo el cual un fragmento se fusiona con el anterior.
+            Con ``0`` no se fusiona nada (útil para probar la partición pura).
 
     Returns:
         Fragmentos sin contenido vacío, en el orden de los documentos de entrada.
@@ -122,7 +134,99 @@ def partir_documentos(
     fragmentos = splitter.split_documents(documentos)
     # Un salto de línea de más al final de un documento produce un fragmento
     # vacío que se indexaría igual y ocuparía un lugar entre los candidatos.
-    return [f for f in fragmentos if f.page_content.strip()]
+    fragmentos = [f for f in fragmentos if f.page_content.strip()]
+
+    return _fusionar_fragmentos_cortos(fragmentos, tamano, minimo_util)
+
+
+def _fusionar_fragmentos_cortos(
+    fragmentos: list[Document],
+    tamano: int,
+    minimo_util: int,
+    factor_fusion: float = FACTOR_FUSION,
+) -> list[Document]:
+    """Fusiona cada fragmento demasiado corto con el anterior del mismo documento.
+
+    La fusión respeta dos límites: no cruza el borde de un documento (el
+    fragmento fusionado tendría dos fuentes y la cita sería ambigua) y no
+    supera el tope de fusión, para no terminar con un fragmento que mezcle dos
+    temas y arruine la precisión de la recuperación.
+    """
+
+    if minimo_util <= 0:
+        return fragmentos
+
+    tope = int(tamano * factor_fusion)
+    resultado: list[Document] = []
+
+    for fragmento in fragmentos:
+        anterior = resultado[-1] if resultado else None
+        mismo_documento = (
+            anterior is not None
+            and anterior.metadata.get("fuente") == fragmento.metadata.get("fuente")
+        )
+        largo = len(fragmento.page_content)
+        combinado = (
+            len(anterior.page_content) + len(fragmento.page_content) + 1
+            if mismo_documento
+            else 0
+        )
+
+        if mismo_documento and largo < minimo_util and combinado <= tope:
+            resultado[-1] = Document(
+                page_content=f"{anterior.page_content}\n\n{fragmento.page_content}",
+                metadata=dict(anterior.metadata),
+            )
+        else:
+            resultado.append(fragmento)
+
+    return _fusionar_inicios_huerfanos(resultado, minimo_util, tope)
+
+
+def _fusionar_inicios_huerfanos(
+    fragmentos: list[Document],
+    minimo_util: int,
+    tope: int,
+) -> list[Document]:
+    """Fusiona un fragmento corto que abre su documento con el que viene después.
+
+    Es el caso del título suelto: el documento empieza con un encabezado que el
+    splitter separa del primer párrafo. No tiene fragmento anterior del mismo
+    archivo, así que la fusión va hacia adelante. Se conserva el texto del
+    título al principio, porque es lo que hace que una pregunta sobre el tema del
+    documento lo encuentre.
+    """
+
+    resultado: list[Document] = []
+    pendiente: Document | None = None
+
+    for fragmento in fragmentos:
+        if pendiente is not None:
+            misma_fuente = pendiente.metadata.get("fuente") == fragmento.metadata.get(
+                "fuente"
+            )
+            combinado = len(pendiente.page_content) + len(fragmento.page_content) + 1
+            if misma_fuente and combinado <= tope:
+                resultado.append(
+                    Document(
+                        page_content=f"{pendiente.page_content}\n\n{fragmento.page_content}",
+                        metadata=dict(fragmento.metadata),
+                    )
+                )
+                pendiente = None
+                continue
+            resultado.append(pendiente)
+            pendiente = None
+
+        if len(fragmento.page_content) < minimo_util:
+            pendiente = fragmento
+        else:
+            resultado.append(fragmento)
+
+    if pendiente is not None:
+        resultado.append(pendiente)
+
+    return resultado
 
 
 def construir_ids(fragmentos: list[Document]) -> list[str]:
