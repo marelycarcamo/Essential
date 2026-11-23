@@ -124,6 +124,8 @@ Essential/
 ├── main.py
 ├── pytest.ini
 ├── recuperacion.py
+├── registro_rag.py
+├── registros_latencia_costo.jsonl
 ├── README.md
 ├── requirements.txt
 ├── resultados_evaluacion.txt
@@ -131,7 +133,8 @@ Essential/
 ├── revision_manual.py
 ├── test_evaluacion_recuperacion.py
 ├── test_indexar_corpus.py
-└── test_recuperacion.py
+├── test_recuperacion.py
+└── test_registro_rag.py
 
 ```
 
@@ -172,6 +175,9 @@ Essential/
 | `resultados_evaluacion_k5.txt` | La misma evaluación con `k=5`, para comparar el trade-off de precisión y recall entre las dos configuraciones. |
 | `experimentos/listar_fragmentos.py` | Imprime cada fragmento del índice con su id. Es lo que se usa para etiquetar a mano el conjunto de evaluación leyendo el corpus, no el retriever. |
 | `test_evaluacion_recuperacion.py` | Pruebas de las fórmulas, del promedio con casos sin respuesta, del formato del archivo y de la negativa a sobrescribir una corrida anterior. |
+| `registro_rag.py` | Instrumenta el flujo completo: cronometra la búsqueda y la generación por separado, lee los tokens reales del proveedor y calcula el costo con `src/costos.py`. Agrega una línea al archivo de registros por consulta. |
+| `registros_latencia_costo.jsonl` | Registro de las corridas reales, una por línea: tiempos por etapa, tokens y costo en USD. |
+| `test_registro_rag.py` | Pruebas de la traducción del uso de LangChain, del costo por componente, del cronómetro (incluso cuando la etapa falla) y del formato JSON Lines. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -357,6 +363,16 @@ python evaluacion_recuperacion.py --k 5 --salida resultados_evaluacion_k5.txt
 Corre las 15 preguntas del conjunto de evaluación contra el retriever real y guarda precisión@k y recall@k por pregunta, más el promedio. Se niega a sobrescribir un archivo existente: cada configuración nueva va a su propio archivo, porque la comparación es lo que da valor a la medición.
 
 Para etiquetar un caso nuevo o reetiquetar cuando cambie el corpus, `python experimentos/listar_fragmentos.py` imprime cada fragmento con su id.
+
+### 8.10. Registrar latencia y costo del flujo RAG
+
+```bash
+python registro_rag.py                    # 3 preguntas del conjunto de evaluación
+python registro_rag.py --preguntas 5 --k 6
+python registro_rag.py --resumen          # resumen de lo registrado
+```
+
+Cada consulta agrega una línea a `registros_latencia_costo.jsonl` con los tiempos por etapa (`embed_y_busqueda` y `generacion`), los tokens reales informados por el proveedor y el costo en USD calculado con `src/costos.py` —tarifas por componente y distinción de hora punta—. El costo de cada corrida queda impreso en pantalla junto con el acumulado.
 
 ## 9. Pruebas y validación
 
@@ -614,6 +630,23 @@ La respuesta fue: el contexto no incluye esa información y no puede responder c
 
 **Límite del método, declarado:** precisión@k con un solo fragmento relevante tiene techo 1/k, así que comparar precisión entre valores distintos de `k` mide sobre todo cuántos lugares sobra, no calidad de búsqueda. Dos corridas seguidas con la misma configuración dieron archivos idénticos, así que la recuperación es determinista y las diferencias entre configuraciones son reales.
 
+### 9.13. Latencia y costo del flujo RAG (Bloque 28)
+
+Cuatro consultas reales sobre el índice de 31 fragmentos, con generación en DeepSeek y costo calculado con `src/costos.py`:
+
+| Pregunta | k | Búsqueda | Generación | Total | Tokens entrada | Costo |
+|---|---:|---:|---:|---:|---:|---:|
+| ¿Qué hace el cliente ante un 401? | 3 | 2 073 ms | 1 783 ms | 3 856 ms | 400 | $0,000150 |
+| ¿Cómo crece la espera entre reintentos? | 3 | 630 ms | 1 620 ms | 2 251 ms | 354 | $0,000168 |
+| ¿Por qué un 429 obliga a bajar el ritmo? | 3 | 589 ms | 2 908 ms | 3 497 ms | 403 | $0,000345 |
+| ¿Qué hace el cliente ante un 401? | **6** | 758 ms | 2 326 ms | 3 084 ms | **668** | $0,000237 |
+
+**La prueba de que `k` afecta el costo real, no la teoría:** la misma pregunta con `k=3` envió **400** tokens de entrada y con `k=6` envió **668**. Ciento dieciocho tokens de contexto más por tres fragmentos adicionales, y el costo subió en la misma proporción.
+
+**La generación domina la latencia, salvo en la primera corrida.** Las tres consultas con `k=3` gastaron entre 1,6 y 2,9 segundos generando, contra 0,6 a 0,76 segundos buscando. La excepción es la primera, con 2 073 ms de búsqueda: es el arranque en frío de la conexión con el proveedor de embeddings, no el índice. Consecuencia práctica: optimizar la búsqueda vectorial local no mejora la latencia percibida; el tiempo se va en la generación.
+
+**Costo total de las cuatro consultas: US$ 0,0009.** Con estas tarifas, mil consultas cuestan menos de 25 centavos: el costo no es la restricción de este proyecto, la latencia sí.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -736,6 +769,19 @@ La respuesta fue: el contexto no incluye esa información y no puede responder c
 - **Verificación (determinismo):** dos corridas consecutivas con la misma configuración produjeron archivos idénticos, así que las diferencias entre configuraciones son reales y no ruido del servicio.
 - **Evidencia:** 20 pruebas nuevas (335 en total) y las tres corridas reales de la sección 9.12.
 
+##### Bloque 28: Latencia y costo del flujo RAG completo (Core)
+
+- **Objetivo:** instrumentar el flujo completo —embedding, búsqueda y generación— con medición real de tiempo y de tokens, y dejar un registro guardado que se pueda comparar en el futuro.
+- **Implementación:** `registro_rag.py` con `medir_tiempo` (contextmanager por etapa), `normalizar_uso`, `calcular_costo_de_uso`, `registrar_consulta`, `agregar_registro`, `leer_registros` y `resumir_registros`. Salida en `registros_latencia_costo.jsonl`, una línea JSON por consulta, en modo `append`.
+- **Decisión (mismo camino que la consulta real):** `registrar_consulta` llama a `construir_prompt` de `recuperacion.py` en vez de reimplementar la recuperación. Lo medido es el flujo del proyecto; una copia paralela se desactualiza al primer cambio y mide otra cosa.
+- **Decisión (un solo lugar para el costo):** la traducción de `usage_metadata` de LangChain a las claves del proveedor vive en `normalizar_uso`, y el cálculo se delega a `src/costos.py`. Ni una fórmula de precio duplicada: si el proveedor cambia una tarifa, se toca el módulo y el registro sigue siendo correcto.
+- **Decisión (el reloj en `finally`):** el cronómetro guarda el tiempo incluso si la etapa falla. Un flujo que revienta a los 80 segundos tarda 80 segundos, y ese dato es el que explica el fallo.
+- **Diferencia con el material:** el material genera con `ChatGoogleGenerativeAI` y no calcula costo en dólares, solo guarda tokens. Se usa DeepSeek —el proveedor del proyecto— y se agrega el monto real por componente, que es lo que pide el checklist del Gate 2.
+- **Hallazgo (k y costo):** la misma pregunta con `k=3` envió 400 tokens de entrada y con `k=6` envió 668. El costo siguió la misma proporción. `k` no es un parámetro de calidad abstracto: es dinero y latencia.
+- **Hallazgo (dónde se va el tiempo):** la generación consumió entre 1,6 y 2,9 segundos por consulta y la búsqueda entre 0,6 y 0,76, salvo la primera corrida (2 073 ms), que incluye el arranque en frío de la conexión con el proveedor de embeddings. Optimizar el índice local no mejora la latencia percibida.
+- **Costo de las cuatro consultas:** US$ 0,0009 en total. El costo no es la restricción de este proyecto; la latencia sí.
+- **Evidencia:** 16 pruebas nuevas (351 en total) y la corrida real de la sección 9.13, con el archivo de registros versionado.
+
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
 - Ampliar el conjunto de comentarios de prueba.
@@ -754,6 +800,8 @@ Entre las posibles mejoras se encuentran:
 - **El corpus es una foto de la documentación, no la documentación:** los seis documentos de `corpus/` están escritos a mano y hay que mantenerlos sincronizados con el código. Un cambio en `src/costos.py` que no se refleje en `corpus/02_costos.md` produce respuestas correctas sobre un sistema que ya no existe.
 - **La precisión@k tiene techo 1/k:** con un solo fragmento relevante por pregunta, comparar precisión entre valores distintos de `k` mide cuántos lugares sobran, no la calidad de la búsqueda. Una comparación honesta entre configuraciones exige mirar el recall, o usar una métrica que no dependa de `k` (por ejemplo MRR o nDCG).
 - **El conjunto de evaluación tiene 15 casos y todos de un solo fragmento:** mide bien el caso "una pregunta, un fragmento que responde", y no cubre preguntas cuya respuesta está repartida en dos documentos. Ampliarlo a casos multi-fragmento exigiría otra relación de control, porque con varios ids relevantes el recall ya puede superar a la precisión.
+- **El registro de latencia no distingue prueba de medición:** `registros_latencia_costo.jsonl` acumula todas las corridas, y una corrida de prueba mezclada con las representativas ensucia el promedio. La forma de mantenerlo limpio hoy es disciplina al correr; la forma correcta sería una columna `origen` que separe `prueba` de `medicion`.
+- **El costo depende de la hora de la corrida:** las tarifas se duplican en hora punta (01:00–04:00 y 06:00–10:00 UTC de lunes a viernes). Dos corridas idénticas hechas en momentos distintos pueden tener costos distintos, y eso es correcto, no un error de medición.
 
 ## 12. Conclusión
 
