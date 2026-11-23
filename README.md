@@ -112,6 +112,7 @@ Essential/
 │   ├── test_parsear_json.py
 │   └── test_pipeline_texto.py
 ├── experimentos/
+│   ├── contar_oraciones.py
 │   ├── ensayo_rate_limit.py
 │   ├── listar_fragmentos.py
 │   ├── medir_metricas.py
@@ -119,6 +120,9 @@ Essential/
 │   └── verificar_indice.py
 ├── .env.example
 ├── .gitignore
+├── dataset_tuning.py
+├── decision.py
+├── decision_personalizacion.md
 ├── evaluacion_recuperacion.py
 ├── indexar_corpus.py
 ├── main.py
@@ -131,6 +135,8 @@ Essential/
 ├── resultados_evaluacion.txt
 ├── resultados_evaluacion_k5.txt
 ├── revision_manual.py
+├── test_dataset_tuning.py
+├── test_decision.py
 ├── test_evaluacion_recuperacion.py
 ├── test_indexar_corpus.py
 ├── test_recuperacion.py
@@ -178,6 +184,12 @@ Essential/
 | `registro_rag.py` | Instrumenta el flujo completo: cronometra la búsqueda y la generación por separado, lee los tokens reales del proveedor y calcula el costo con `src/costos.py`. Agrega una línea al archivo de registros por consulta. |
 | `registros_latencia_costo.jsonl` | Registro de las corridas reales, una por línea: tiempos por etapa, tokens y costo en USD. |
 | `test_registro_rag.py` | Pruebas de la traducción del uso de LangChain, del costo por componente, del cronómetro (incluso cuando la etapa falla) y del formato JSON Lines. |
+| `dataset_tuning.py` | Dataset de 13 pares comentario → JSON para personalización, con catálogo cerrado de dimensiones y valoraciones, conteo de balance y validador de formato, claves y catálogo. |
+| `decision.py` | Método de decisión de cinco preguntas con puntaje de las tres estrategias y generación del esqueleto del documento. No sobrescribe un documento ya redactado. |
+| `decision_personalizacion.md` | Documento de decisión: problema, puntaje con la evidencia de cada respuesta, técnica elegida y qué falta para ejecutarla. |
+| `experimentos/contar_oraciones.py` | Cuenta las oraciones de las 20 respuestas reales guardadas para responder con un número si la instrucción de formato se cumple. |
+| `test_dataset_tuning.py` | Pruebas del dataset y, sobre todo, del validador: cada caso roto está puesto a propósito para confirmar que lo detecta. |
+| `test_decision.py` | Pruebas del puntaje, del manejo de empates, del orden de las secciones y del resultado del caso real. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -374,6 +386,22 @@ python registro_rag.py --resumen          # resumen de lo registrado
 
 Cada consulta agrega una línea a `registros_latencia_costo.jsonl` con los tiempos por etapa (`embed_y_busqueda` y `generacion`), los tokens reales informados por el proveedor y el costo en USD calculado con `src/costos.py` —tarifas por componente y distinción de hora punta—. El costo de cada corrida queda impreso en pantalla junto con el acumulado.
 
+### 8.11. Validar el dataset de personalización
+
+```bash
+python dataset_tuning.py
+```
+
+Imprime el número de ejemplos, el balance por valoración y por dimensión, y la lista de problemas del validador. Sale con código 1 si encuentra alguno, para que se pueda usar en un script de comprobación. No envía ningún trabajo de entrenamiento: la actividad pide el dataset preparado y validado.
+
+### 8.12. Generar el esqueleto de la decisión de personalización
+
+```bash
+python decision.py
+```
+
+Puntúa RAG, fine-tuning completo y PEFT con las cinco respuestas del caso, e imprime el esqueleto del documento. Escribe `decision_personalizacion.md` **solo si no existe**: las secciones 3 y 4 se redactan a mano y no se reconstruyen ejecutando el script otra vez.
+
 ## 9. Pruebas y validación
 
 El proyecto contempla distintas instancias de validación:
@@ -517,6 +545,8 @@ Corrida del **2026-10-31** sobre cinco consultas, cada una con su referencia esc
 
 **La lectura importante está en la diferencia entre precisión y cobertura.** Cobertura 0,79 contra precisión 0,28: el modelo dice casi todo lo que la referencia esperaba, pero con muchas palabras de más. Pese a la instrucción "responde en una sola oración", las respuestas vinieron largas.
 
+> **Corrección (Bloque 30, 2026-11-23).** La frase anterior se escribió por impresión y la medición la desmiente en parte: al contar las oraciones de las 20 respuestas de `docs/resultados_metricas.json` con un criterio fijo (`experimentos/contar_oraciones.py`), **las 20 son de una sola oración** (0 % de incumplimiento). Están largas, sí, pero dentro de una oración: la baja precisión mide extensión frente a una referencia corta, no desobediencia de la instrucción. La conclusión sobre qué métrica mirar sigue en pie; la causa atribuida, no.
+
 Eso cambia qué métrica mirar: si la referencia es corta y específica, la precisión es la que manda, y aquí es la que está mal.
 
 **Los dos casos que valen la pena leer:**
@@ -647,6 +677,42 @@ Cuatro consultas reales sobre el índice de 31 fragmentos, con generación en De
 
 **Costo total de las cuatro consultas: US$ 0,0009.** Con estas tarifas, mil consultas cuestan menos de 25 centavos: el costo no es la restricción de este proyecto, la latencia sí.
 
+### 9.14. Dataset de personalización (Bloque 29)
+
+La tarea elegida es la del banco de prompts: comentario libre de una encuesta → JSON con las dimensiones mencionadas y la valoración. Es un problema de **comportamiento consistente** —las categorías son un catálogo cerrado y el formato es fijo—, no de información faltante; si fuera "al modelo le falta saber X", el caso sería de RAG.
+
+| Comprobación | Resultado |
+|---|---|
+| Ejemplos construidos | 13 (el mínimo pedido es 10) |
+| Problemas del validador | 0 |
+| Balance por valoración | positiva 4 · negativa 4 · mixta 3 · neutral 2 |
+| Dimensiones cubiertas | las 8 del catálogo |
+| Categoría más frecuente | 31 %, bajo el umbral de desbalance de 50 % |
+
+**La prueba de que el validador sirve no es que corra, es que encuentre lo que se le pone.** Tiene 13 casos rotos a propósito en la suite: falta de clave, clave inesperada, JSON inválido, JSON que no es objeto, texto vacío, texto duplicado, dimensión fuera del catálogo, dimensiones vacías, dimensiones que no son lista, dimensión repetida y valoración fuera del catálogo. Una etiqueta inventada es el modo de falla más caro: el modelo la aprende y la reproduce con seguridad.
+
+**Desvío declarado:** no se envía un trabajo de tuning. Requiere una cuenta con tuning habilitado y consume cuota, y la actividad pide el dataset preparado y validado. El paso de envío queda descrito en el material del bloque, no ejecutado.
+
+### 9.15. Decisión de personalización fundamentada (Bloque 30)
+
+El método de cinco preguntas aplicado al proyecto, con evidencia en cada respuesta:
+
+| Pregunta | Respuesta | Puntaje que aporta |
+|---|---|---|
+| El contenido cambia al menos una vez al mes | **sí** | RAG +3 |
+| Hay problemas de formato o tono (≥15 % de 20 respuestas) | **no** | — |
+| Hay 200 ejemplos etiquetados de calidad | **no** | — |
+| Presupuesto limitado o necesidad de iterar rápido | **sí** | RAG +2 · PEFT +1 |
+| Se necesitan varias variantes del modelo | **no** | — |
+
+**Resultado: RAG 5 · PEFT 1 · Fine-tuning completo 0.** Ganadora única, sin empate.
+
+**El dato que decidió no fue el presupuesto, fue la medición del formato.** El promedio de precisión bajo del Bloque 16 se había atribuido a que la instrucción "responde en una sola oración" no se cumplía. Se contaron las oraciones de las 20 respuestas reales con un criterio fijo y **las 20 la cumplen** (0 % de incumplimiento, contra un umbral de 15 %). Sin problema de comportamiento medido, PEFT y fine-tuning pierden su justificación, y no por falta de dinero: aunque lo hubiera, no resolverían el problema planteado.
+
+**El problema real es de procedencia:** la respuesta sobre la sigla PEP citó su significado financiero, sin fuente. Eso no se arregla con ejemplos de comportamiento; se arregla indexando la documentación y citando el fragmento, que es lo que hacen los bloques 24 a 28.
+
+**Lo que falta para ejecutarla**, con números: el índice cubre 6 documentos redactados a mano; quedan **17 fuentes reales sin indexar** (13 módulos de `src/`, 2 documentos de `docs/`, 2 de la raíz). No falta corpus de comentarios ni faltan horas de etiquetado: falta indexar archivos que ya existen.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -707,7 +773,7 @@ Cuatro consultas reales sobre el índice de 31 fragmentos, con generación en De
 - **Objetivo:** pasar de "coincide o no" a "cuánto coincide", contando repeticiones en lugar de comparar conjuntos.
 - **Implementación:** `src/metricas.py` con `contar_coincidencias` (intersección de `Counter`, que toma el mínimo de cada palabra), `calcular_precision_cobertura_f1`, `calcular_metricas` (aplica el pipeline del Bloque 15 de punta a punta), `resumir_metricas` y `ordenar_por_f1`. `experimentos/medir_metricas.py` corre cinco consultas reales y guarda `docs/resultados_metricas.json`.
 - **Decisión (validación de entrada):** `contar_coincidencias` rechaza un `str` con `TypeError`. Sin eso, `Counter` cuenta cada carácter y devuelve un número equivocado **sin fallar**, que es la peor combinación posible.
-- **Hallazgo:** el promedio de las cinco respuestas fue **precisión 0,28 y cobertura 0,79**. La brecha indica respuestas completas pero extensas: la instrucción "responde en una sola oración" no se cumplió y la precisión es la que lo delata.
+- **Hallazgo:** el promedio de las cinco respuestas fue **precisión 0,28 y cobertura 0,79**. La brecha indica respuestas completas pero extensas: la instrucción "responde en una sola oración" no se cumplió y la precisión es la que lo delata. **(Corregido en el Bloque 30: la instrucción sí se cumplió en las 20 respuestas medidas; lo que hay es extensión dentro de una sola oración. Ver §9.8.)**
 - **Hallazgo (límites en producción):** un caso correcto quedó con F1 0,38 por ser más largo que la referencia, y otro con F1 0,18 por usar sinónimos. Son los límites del bloque, apareciendo en respuestas que nadie diseñó para ilustrarlos.
 - **Decisión (límites como pruebas):** los tres casos del material —sinónimo, dato equivocado y negación ausente— quedaron como tests. No verifican que la métrica funcione, sino que **siga midiendo lo mismo**: si alguien intenta "arreglarla" para que el sinónimo dé 1,0, la suite lo detiene y explica por qué.
 - **Evidencia:** 18 pruebas nuevas (172 en total), resultados guardados con las respuestas incluidas, costo de US$ 0,00033.
@@ -782,6 +848,27 @@ Cuatro consultas reales sobre el índice de 31 fragmentos, con generación en De
 - **Costo de las cuatro consultas:** US$ 0,0009 en total. El costo no es la restricción de este proyecto; la latencia sí.
 - **Evidencia:** 16 pruebas nuevas (351 en total) y la corrida real de la sección 9.13, con el archivo de registros versionado.
 
+##### Bloque 29: Dataset validado para personalización con PEFT
+
+- **Objetivo:** preparar y validar un dataset de tuning propio, sobre un problema de comportamiento consistente y no de información faltante.
+- **Implementación:** `dataset_tuning.py` con `construir_ejemplos`, `chequear_balance`, `validar_dataset` y `revisar_balance`. 13 pares comentario → JSON construidos con `types.TuningExample`, catálogo cerrado de 8 dimensiones y 4 valoraciones copiado del proyecto.
+- **Decisión (la tarea):** se eligió la clasificación del banco de prompts (comentario libre → dimensiones y valoración) y no un ejemplo genérico de tickets. El modelo ya entiende los comentarios; lo que se busca es que la salida respete un catálogo y un formato fijos. Si el problema fuera "al modelo le falta saber X", el caso sería de RAG y no de tuning.
+- **Decisión (catálogo cerrado en el validador):** además de comprobar JSON y claves, el validador verifica que cada dimensión y cada valoración pertenezcan al catálogo del proyecto, y que no haya claves extra. Una clave extra se aprende igual que una correcta: el modelo imita la salida tal como está escrita.
+- **Decisión (el validador se prueba rompiéndolo):** la suite tiene 13 casos rotos a propósito, uno por tipo de problema. Un validador que solo se prueba con datos buenos no demuestra nada.
+- **Decisión (no enviar el trabajo de tuning):** requiere cuenta con tuning habilitado y consume cuota. La actividad pide el dataset preparado y validado; el envío queda descrito en el material y declarado como desvío.
+- **Evidencia:** 25 pruebas nuevas (376 en total) y el reporte de la sección 9.14: 13 ejemplos, 0 problemas, balance dentro del umbral.
+
+##### Bloque 30: Decisión fundamentada de estrategia de personalización (Core)
+
+- **Objetivo:** aplicar el método de decisión de cinco preguntas al propio proyecto y redactar el documento que un equipo real espera antes de invertir tiempo en personalizar un modelo.
+- **Implementación:** `decision.py` con `recomendar_estrategia` (puntaje de las tres estrategias, devolviendo todas las ganadoras cuando hay empate) y `generar_esqueleto_decision` (cuatro secciones, con `[COMPLETAR]` donde falta criterio humano). `decision_personalizacion.md` es el documento final, redactado a mano.
+- **Decisión (no sobrescribir):** `escribir_documento` falla si el documento existe. El esqueleto se puede regenerar; las secciones 3 y 4, no, y son justamente las que el puntaje no puede escribir.
+- **Decisión (empate explícito):** la función devuelve la lista completa de ganadoras. Presentar la primera del diccionario como ganadora única es el error que el material corrige en la lección anterior, y esconde la parte que necesita criterio.
+- **Hallazgo (la evidencia cambió la respuesta):** para responder "¿hay un problema de formato?" se contaron las oraciones de las 20 respuestas reales guardadas, con un criterio fijo y sin gastar una llamada: **las 20 cumplen la instrucción de una sola oración**. Esto **desmiente** una afirmación que quedó escrita en el README del Bloque 16 —que la instrucción no se cumplía— y que se corrigió en la sección 9.8 con una nota fechada.
+- **Resultado:** RAG 5 · PEFT 1 · Fine-tuning completo 0. Ganadora única: RAG. El problema del proyecto es de **procedencia** —una respuesta sobre la sigla PEP salió con su significado financiero, sin fuente—, no de comportamiento; y las fuentes cambian con cada bloque, así que cualquier conocimiento fijado en los pesos nace desactualizado.
+- **Hallazgo (sección 4 con números):** el índice cubre 6 documentos escritos a mano y quedan **17 fuentes reales sin indexar** (13 de `src/`, 2 de `docs/`, 2 de la raíz). Lo que falta es indexar archivos que ya existen, no etiquetar 187 ejemplos más.
+- **Evidencia:** 17 pruebas nuevas (393 en total) y el documento con las cuatro secciones completas (sección 9.15).
+
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
 - Ampliar el conjunto de comentarios de prueba.
@@ -802,6 +889,8 @@ Entre las posibles mejoras se encuentran:
 - **El conjunto de evaluación tiene 15 casos y todos de un solo fragmento:** mide bien el caso "una pregunta, un fragmento que responde", y no cubre preguntas cuya respuesta está repartida en dos documentos. Ampliarlo a casos multi-fragmento exigiría otra relación de control, porque con varios ids relevantes el recall ya puede superar a la precisión.
 - **El registro de latencia no distingue prueba de medición:** `registros_latencia_costo.jsonl` acumula todas las corridas, y una corrida de prueba mezclada con las representativas ensucia el promedio. La forma de mantenerlo limpio hoy es disciplina al correr; la forma correcta sería una columna `origen` que separe `prueba` de `medicion`.
 - **El costo depende de la hora de la corrida:** las tarifas se duplican en hora punta (01:00–04:00 y 06:00–10:00 UTC de lunes a viernes). Dos corridas idénticas hechas en momentos distintos pueden tener costos distintos, y eso es correcto, no un error de medición.
+- **El dataset de tuning no se envió:** tiene 13 ejemplos validados, el mínimo que pide la actividad y muy por debajo de los 200 que el método de decisión considera suficientes. Enviarlo hoy entrenaría un modelo sobre una muestra que no sostiene generalización.
+- **El corpus del índice son documentos escritos a mano, no las fuentes reales:** 6 archivos de `corpus/` frente a 17 fuentes del proyecto que no están indexadas. Mientras eso siga así, el sistema responde sobre una descripción del código y no sobre el código.
 
 ## 12. Conclusión
 
