@@ -125,6 +125,7 @@ Essential/
 ├── decision_personalizacion.md
 ├── evaluacion_recuperacion.py
 ├── indexar_corpus.py
+├── logging_rag.py
 ├── main.py
 ├── pytest.ini
 ├── recuperacion.py
@@ -139,6 +140,7 @@ Essential/
 ├── test_decision.py
 ├── test_evaluacion_recuperacion.py
 ├── test_indexar_corpus.py
+├── test_logging_rag.py
 ├── test_recuperacion.py
 └── test_registro_rag.py
 
@@ -190,6 +192,8 @@ Essential/
 | `experimentos/contar_oraciones.py` | Cuenta las oraciones de las 20 respuestas reales guardadas para responder con un número si la instrucción de formato se cumple. |
 | `test_dataset_tuning.py` | Pruebas del dataset y, sobre todo, del validador: cada caso roto está puesto a propósito para confirmar que lo detecta. |
 | `test_decision.py` | Pruebas del puntaje, del manejo de empates, del orden de las secciones y del resultado del caso real. |
+| `logging_rag.py` | Logging estructurado en JSON con `trace_id` por consulta (`ContextVar`), registro de consumo en tokens y filtro de inyección sobre la interfaz real de `Document`. Nunca registra el texto de la pregunta ni de los documentos: solo longitud, huella y fuente. |
+| `test_logging_rag.py` | Pruebas de los patrones de inyección, del aislamiento del `trace_id`, del registro de consumo y de que los logs no expongan contenido crudo. Incluye el caso del objeto con la interfaz equivocada (`contenido` en vez de `page_content`). |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -401,6 +405,14 @@ python decision.py
 ```
 
 Puntúa RAG, fine-tuning completo y PEFT con las cinco respuestas del caso, e imprime el esqueleto del documento. Escribe `decision_personalizacion.md` **solo si no existe**: las secciones 3 y 4 se redactan a mano y no se reconstruyen ejecutando el script otra vez.
+
+### 8.13. Ver la traza de una consulta instrumentada
+
+```bash
+python logging_rag.py
+```
+
+Corre una consulta con un documento limpio y uno con intento de inyección, e imprime el registro auditable completo: eventos, `trace_id` compartido, documento descartado con su número de patrones y consumo en tokens. Al terminar, el `trace_id` vuelve a `None`, lo que confirma que el `ContextVar` se reseteó.
 
 ## 9. Pruebas y validación
 
@@ -713,6 +725,24 @@ El método de cinco preguntas aplicado al proyecto, con evidencia en cada respue
 
 **Lo que falta para ejecutarla**, con números: el índice cubre 6 documentos redactados a mano; quedan **17 fuentes reales sin indexar** (13 módulos de `src/`, 2 documentos de `docs/`, 2 de la raíz). No falta corpus de comentarios ni faltan horas de etiquetado: falta indexar archivos que ya existen.
 
+### 9.16. Instrumentación, consumo y filtro de inyección (Bloque 31)
+
+Corrida de `python logging_rag.py` con un documento limpio y otro con intento de inyección. Los cuatro eventos comparten el mismo `trace_id`:
+
+```text
+{"evento": "consulta_recibida", "trace_id": "trace-6fcf83f1", "pregunta_len": 43, "pregunta_huella": "0aac056c3ee0"}
+{"evento": "documento_descartado_por_inyeccion", "trace_id": "trace-6fcf83f1", "fuente": "comentario_de_usuario.txt", "n_patrones": 3}
+{"evento": "contexto_filtrado", "trace_id": "trace-6fcf83f1", "n_recuperados": 2, "n_limpios": 1, "n_descartados": 1}
+{"evento": "consumo_llm", "trace_id": "trace-6fcf83f1", "input_tokens": 210, "output_tokens": 18, "total_tokens": 228}
+trace_id fuera de la consulta: None
+```
+
+Qué se puede reconstruir mirando **solo los logs**, sin ver la ejecución: que llegó una consulta de 43 caracteres (sin saber de qué hablaba), que se descartó un documento del `comentario_de_usuario.txt` por coincidir con 3 patrones, que quedó 1 documento limpio para el prompt y que la llamada costó 228 tokens. Eso es lo que significa que el flujo sea auditable.
+
+**El criterio no compensable, verificado en prueba:** una consulta con un correo dentro y un documento que repite ese correo produce logs donde **ni el correo, ni la pregunta completa, ni el contenido del documento aparecen**. Se registra `pregunta_len` y `pregunta_huella`, no el texto.
+
+**Y el filtro no es infalible, por diseño:** es una lista negra. Un documento que hable de seguridad puede activar un patrón y ser descartado sin ser un ataque; un ataque con sinónimos o en otro idioma pasa sin ser visto. Por eso el sistema no confía solo en él: si todos los documentos quedan descartados, **no se llama al modelo** y se responde `RESPUESTA_SIN_CONTEXTO`, con un evento `sin_contexto_confiable` que deja constancia de por qué.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -869,6 +899,18 @@ El método de cinco preguntas aplicado al proyecto, con evidencia en cada respue
 - **Hallazgo (sección 4 con números):** el índice cubre 6 documentos escritos a mano y quedan **17 fuentes reales sin indexar** (13 de `src/`, 2 de `docs/`, 2 de la raíz). Lo que falta es indexar archivos que ya existen, no etiquetar 187 ejemplos más.
 - **Evidencia:** 17 pruebas nuevas (393 en total) y el documento con las cuatro secciones completas (sección 9.15).
 
+##### Bloque 31: Logging estructurado, consumo y filtro de inyección
+
+- **Objetivo:** hacer auditable cada consulta —qué se recuperó, qué se descartó, cuánto costó— sin convertir el log en una filtración de datos.
+- **Implementación:** `logging_rag.py` con `trace_id_var` (`ContextVar`), `JsonFormatter`, `configurar_logging`, `evento`, `registrar_consumo`, `detectar_inyeccion`, `filtrar_documentos_sospechosos` y `procesar_consulta`. Dependencia nueva: `langgraph` (para el Bloque 32) y `langgraph-checkpoint-sqlite`; `requirements.txt` 146 → 149 líneas.
+- **Decisión (no registrar contenido crudo):** se registra `pregunta_len`, una huella SHA-256 de la pregunta y la fuente del documento, nunca su texto. Un log se copia y se comparte; la pregunta de un usuario y el contenido de un documento ahí son una filtración, y el Gate 2 lo trata como criterio no compensable.
+- **Decisión (el filtro nace contra la interfaz real):** `filtrar_documentos_sospechosos` lee `page_content` y `metadata`, no una clase de ejemplo propia. El material muestra en vivo el desacople (`d.contenido` contra `Document`) porque cada pieza se probó aislada; acá se escribió contra el tipo real porque el flujo ya existía. Queda una prueba que fija el contrato: pasar un objeto con `contenido` revienta con `AttributeError`, y eso es correcto, porque una versión silenciosa devolvería "sin inyección" siempre.
+- **Decisión (filtrar antes de armar el contexto):** el orden es parte de la garantía. Filtrar después deja el contenido sospechoso dentro del prompt. Lo verifica una prueba que inspecciona el prompt que recibe el modelo.
+- **Decisión (sin contexto limpio, no se llama al modelo):** si todos los documentos se descartan, la respuesta es `RESPUESTA_SIN_CONTEXTO` con un evento `sin_contexto_confiable`. Responder con contexto vacío produce exactamente la respuesta sin respaldo que el Gate no acepta.
+- **Decisión (`propagate` sin apagar):** el `logger` no se aísla (`propagate=False`), para que `caplog` vea los registros y una prueba de "no hay contenido crudo" no pase por vacío.
+- **Hallazgo (el `usage_metadata` exige `total_tokens`):** construir un `AIMessage` con solo entrada y salida lanza `ValidationError`. El bloque de consumo lo lee con `.get`, así que un proveedor que no informe uso no rompe el flujo: registra `None`, que es el dato honesto.
+- **Evidencia:** 23 pruebas nuevas (416 en total) y la traza completa de la sección 9.16.
+
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
 - Ampliar el conjunto de comentarios de prueba.
@@ -891,6 +933,7 @@ Entre las posibles mejoras se encuentran:
 - **El costo depende de la hora de la corrida:** las tarifas se duplican en hora punta (01:00–04:00 y 06:00–10:00 UTC de lunes a viernes). Dos corridas idénticas hechas en momentos distintos pueden tener costos distintos, y eso es correcto, no un error de medición.
 - **El dataset de tuning no se envió:** tiene 13 ejemplos validados, el mínimo que pide la actividad y muy por debajo de los 200 que el método de decisión considera suficientes. Enviarlo hoy entrenaría un modelo sobre una muestra que no sostiene generalización.
 - **El corpus del índice son documentos escritos a mano, no las fuentes reales:** 6 archivos de `corpus/` frente a 17 fuentes del proyecto que no están indexadas. Mientras eso siga así, el sistema responde sobre una descripción del código y no sobre el código.
+- **El filtro de inyección es una lista negra:** reconoce seis patrones fijos. Un ataque con sinónimos, en otro idioma o con las letras separadas pasa sin ser visto, y un documento legítimo sobre seguridad puede ser descartado. Es una barrera barata entre varias, no una garantía.
 
 ## 12. Conclusión
 
