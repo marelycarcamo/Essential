@@ -1,0 +1,20 @@
+Fecha: 2026-11-23
+Configuracion: k=5, chunk_size=400, chunk_overlap=60, embeddings=models/gemini-embedding-001
+
+0.20  1.00  ¿Qué hace el cliente cuando el proveedor responde 401?
+0.20  1.00  ¿Cómo crece la espera entre reintentos y cuál es su techo?
+0.20  1.00  ¿Por qué un 429 obliga a bajar el ritmo y un 5xx no?
+0.20  1.00  ¿Por qué el costo no se calcula con un solo precio por token?
+0.20  1.00  ¿Cuánto cuesta un millón de tokens de salida en valle y en punta?
+0.20  1.00  ¿En qué franja horaria aplica la tarifa de hora punta?
+0.20  1.00  ¿Qué dimensiones clasifica el prompt de clasificación?
+0.20  1.00  ¿Qué niveles de prioridad llevan las recomendaciones?
+0.20  1.00  ¿Qué herramienta escribe en disco y qué exige antes de escribir?
+0.20  1.00  ¿Cómo recuerda el agente lo que se dijo en el turno anterior?
+0.20  1.00  ¿Qué se hace para que un test de reintentos no tarde veinte segundos?
+0.20  1.00  ¿Qué pasa con la puntuación al limpiar el texto?
+0.20  1.00  ¿Por qué buscar 'demora' no encuentra un párrafo que dice 'latencia'?
+0.00  n/a  ¿Bajo qué licencia se distribuye el proyecto?
+0.00  n/a  ¿Cuántos alumnos hay inscritos en el curso de capacitación?
+
+promedio -> precision: 0.173  recall: 1.000

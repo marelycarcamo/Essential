@@ -113,18 +113,23 @@ Essential/
 │   └── test_pipeline_texto.py
 ├── experimentos/
 │   ├── ensayo_rate_limit.py
+│   ├── listar_fragmentos.py
 │   ├── medir_metricas.py
 │   ├── medir_pipeline.py
 │   └── verificar_indice.py
 ├── .env.example
 ├── .gitignore
+├── evaluacion_recuperacion.py
 ├── indexar_corpus.py
 ├── main.py
 ├── pytest.ini
 ├── recuperacion.py
 ├── README.md
 ├── requirements.txt
+├── resultados_evaluacion.txt
+├── resultados_evaluacion_k5.txt
 ├── revision_manual.py
+├── test_evaluacion_recuperacion.py
 ├── test_indexar_corpus.py
 └── test_recuperacion.py
 
@@ -162,6 +167,11 @@ Essential/
 | `test_indexar_corpus.py` | Pruebas de la indexación con embeddings falsos: carga, partición, ids, integridad y persistencia real en un directorio temporal, sin red ni cuota. |
 | `recuperacion.py` | Recupera por significado los fragmentos más parecidos a una pregunta, los numera y arma el prompt que obliga a citar la fuente. Devuelve el mapa de citas y los problemas detectados en ellas. |
 | `test_recuperacion.py` | Pruebas de la recuperación con un índice real en directorio temporal y un modelo de generación doble: numeración, `k`, validación de la pregunta y detección de citas inventadas. |
+| `evaluacion_recuperacion.py` | Corre 15 preguntas etiquetadas a mano contra el retriever real y calcula precisión y recall por caso y promedio. Guarda la corrida sin sobrescribir las anteriores y lee la configuración del índice en vez de escribirla a mano. |
+| `resultados_evaluacion.txt` | Corrida de referencia con `k=3`: una línea de fecha, una de configuración, una por pregunta y el promedio. |
+| `resultados_evaluacion_k5.txt` | La misma evaluación con `k=5`, para comparar el trade-off de precisión y recall entre las dos configuraciones. |
+| `experimentos/listar_fragmentos.py` | Imprime cada fragmento del índice con su id. Es lo que se usa para etiquetar a mano el conjunto de evaluación leyendo el corpus, no el retriever. |
+| `test_evaluacion_recuperacion.py` | Pruebas de las fórmulas, del promedio con casos sin respuesta, del formato del archivo y de la negativa a sobrescribir una corrida anterior. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -336,6 +346,17 @@ python recuperacion.py "¿qué pasa si la llamada al proveedor falla varias vece
 ```
 
 Recupera los tres fragmentos más parecidos por significado, arma el prompt con el contexto numerado, genera la respuesta y muestra el mapa de citas. Requiere el índice creado con el comando anterior.
+
+### 8.9. Evaluar la recuperación con métricas
+
+```bash
+python evaluacion_recuperacion.py
+python evaluacion_recuperacion.py --k 5 --salida resultados_evaluacion_k5.txt
+```
+
+Corre las 15 preguntas del conjunto de evaluación contra el retriever real y guarda precisión@k y recall@k por pregunta, más el promedio. Se niega a sobrescribir un archivo existente: cada configuración nueva va a su propio archivo, porque la comparación es lo que da valor a la medición.
+
+Para etiquetar un caso nuevo o reetiquetar cuando cambie el corpus, `python experimentos/listar_fragmentos.py` imprime cada fragmento con su id.
 
 ## 9. Pruebas y validación
 
@@ -533,7 +554,7 @@ Todo quedó documentado en `docs/limites_metrica.md`, con la rúbrica aplicada c
 
 ### 9.10. Verificación del índice vectorial (Bloque 24)
 
-El corpus son **6 documentos** del proyecto, partidos en **34 fragmentos** con `chunk_size=400` y `chunk_overlap=60`. La partición se decidió con una medición previa: el splitter corta en párrafos, así que bajar el tamaño a 200 duplica los fragmentos (85) sin ganar precisión, y subirlo a 600 mezcla temas distintos dentro del mismo fragmento.
+El corpus son **6 documentos** del proyecto, partidos en **31 fragmentos** con `chunk_size=400` y `chunk_overlap=60`. La partición se decidió con una medición previa: el splitter corta en párrafos, así que bajar el tamaño a 200 duplica los fragmentos (85) sin ganar precisión, y subirlo a 600 mezcla temas distintos dentro del mismo fragmento.
 
 La prueba de que el índice **persistió** no es que el script de indexación termine sin error, sino que un proceso distinto se reconecte al mismo directorio y cuente lo mismo:
 
@@ -543,7 +564,7 @@ python experimentos/verificar_indice.py
 
 | Comprobación | Resultado |
 |---|---|
-| Fragmentos en disco (proceso nuevo) | 34 |
+| Fragmentos en disco (proceso nuevo) | 31 |
 | Modelo registrado en la colección | `models/gemini-embedding-001` |
 | Llamadas de embedding al indexar | 1 (un solo lote) |
 
@@ -559,7 +580,7 @@ La primera consulta **no** trae como primer resultado el fragmento de backoff, s
 
 ### 9.11. Verificación del flujo de recuperación con citas (Bloque 26)
 
-Dos corridas reales contra el índice de 34 fragmentos, con generación en DeepSeek:
+Dos corridas reales contra el índice de 31 fragmentos, con generación en DeepSeek:
 
 **Pregunta respondible** — *¿Qué pasa si la llamada al proveedor falla varias veces?*
 
@@ -575,6 +596,23 @@ Dos corridas reales contra el índice de 34 fragmentos, con generación en DeepS
 La respuesta fue: el contexto no incluye esa información y no puede responder con las fuentes dadas, citando los tres fragmentos que revisó. No inventó una cifra. Es la verificación que importa: un sistema que siempre responde algo no distingue entre saber y no saber.
 
 **Trazabilidad de una cita, verificada a mano:** `[3]` apuntaba a `01_cliente_modular.md#0`, y ese fragmento efectivamente describe `con_reintento()` como función interna. La cita es correcta, no decorativa.
+
+### 9.12. Evaluación de la recuperación: precisión y recall (Bloque 27)
+
+15 preguntas sobre el corpus: 13 con un fragmento que las responde y **2 imposibles** (licencia del proyecto y número de alumnos), para comprobar que el sistema no fuerza una respuesta donde no la hay. Las etiquetas se decidieron leyendo los 31 fragmentos, antes de ver qué devolvía el retriever.
+
+| Configuración | Precisión@k | Recall@k | Archivo |
+|---|---:|---:|---|
+| `k=3` (referencia) | **0,289** | **1,000** | `resultados_evaluacion.txt` |
+| `k=5` | 0,173 | 1,000 | `resultados_evaluacion_k5.txt` |
+
+**El recall 1,000 es el resultado que importa:** en las 13 preguntas respondibles, el fragmento correcto apareció siempre entre los recuperados. La recuperación no falla en ninguna de las 13.
+
+**La precisión de 0,289 no es un defecto y leerla como tal sería el error.** Con `k=3` y un solo fragmento relevante por pregunta, la precisión máxima alcanzable es 1/3 = 0,33. La cuenta lo confirma: 13 casos a 0,33 y 2 a 0,00 dan exactamente 0,289. Es decir, **cada pregunta respondible obtuvo la precisión máxima posible**; el 0,29 solo refleja los dos lugares que sobran en el top-3.
+
+**Con `k=5` la precisión baja a 0,173, que es 1/5 = 0,20 evaluado sobre 13 casos.** El recall no mejora porque ya estaba en 1,000. Conclusión honesta: en este corpus, subir `k` no mejora nada y solo trae fragmentos irrelevantes al contexto —más tokens de entrada y más ruido para el modelo—. El valor óptimo es `k=3`, y ahora está medido, no supuesto.
+
+**Límite del método, declarado:** precisión@k con un solo fragmento relevante tiene techo 1/k, así que comparar precisión entre valores distintos de `k` mide sobre todo cuántos lugares sobra, no calidad de búsqueda. Dos corridas seguidas con la misma configuración dieron archivos idénticos, así que la recuperación es determinista y las diferencias entre configuraciones son reales.
 
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
@@ -665,24 +703,38 @@ La respuesta fue: el contexto no incluye esa información y no puede responder c
 - **Objetivo:** juntar las dos piezas del bloque —partir texto en fragmentos y calcular embeddings reales— sobre un corpus propio, y dejar el índice persistido en disco para que la recuperación lo consulte sin recalcular nada.
 - **Implementación:** `corpus/` con **seis documentos** del proyecto (cliente modular, costos, banco de prompts, agente, pruebas y búsqueda/pipeline). `indexar_corpus.py` con `cargar_documentos`, `partir_documentos`, `construir_ids`, `verificar_fragmentos`, `indexar_corpus`, `abrir_indice` y `verificar_indice`. Persistencia en `vectorstore/` con Chroma y embeddings de `models/gemini-embedding-001`.
 - **Decisión (proveedor de embeddings):** DeepSeek no ofrece endpoint de embeddings, así que Gemini deja de ser solo el respaldo de generación y pasa a ser el proveedor de embeddings del proyecto. El flujo RAG queda con dos dependencias de proveedor a la vez, y eso está declarado en la sección 11.
-- **Decisión (parámetros de partición):** 400 caracteres con 60 de solapamiento, elegidos midiendo. Con 200 el corpus daba 85 fragmentos —el splitter corta en párrafos, así que el límite real lo ponen los saltos de línea— y con 600 algunos fragmentos mezclaban dos temas. Con 400/60 quedan 34 fragmentos, casi todos de un párrafo completo, y el solapamiento solo actúa cuando un párrafo se parte.
+- **Decisión (parámetros de partición):** 400 caracteres con 60 de solapamiento, elegidos midiendo. Con 200 el corpus daba 85 fragmentos —el splitter corta en párrafos, así que el límite real lo ponen los saltos de línea— y con 600 algunos fragmentos mezclaban dos temas. Con 400/60 quedaron 34 fragmentos, y tras fusionar las colas huérfanas quedaron 31, casi todos de un párrafo completo, y el solapamiento solo actúa cuando un párrafo se parte.
 - **Decisión (metadata e ids desde el primer indexado):** el material agrega `metadata` e `ids` en el Bloque 26 y obliga a reindexar. Se hicieron ahora, por dos razones: `fuente` no se puede agregar retroactivamente sin volver a pagar los embeddings, y los ids predecibles (`archivo.md#3`) son lo que permite etiquetar a mano el conjunto de evaluación del Bloque 27 sin depender del orden interno de Chroma.
 - **Decisión (modelo declarado en la colección):** el índice guarda en su metadata el modelo de embeddings, el tamaño de chunk y el solapamiento. Un índice vectorial no dice con qué modelo se construyó: cambiar de modelo sin reindexar no falla, y si la dimensión coincide devuelve fragmentos sin relación con la pregunta mientras el sistema parece funcionar. `verificar_indice` compara el modelo guardado con el configurado y corta si no coincide.
 - **Hallazgo (log engañoso):** la primera corrida imprimió `Indexando 34 fragmentos con modelo sin declarar` aunque sí lo declaraba, porque el mensaje leía el parámetro opcional antes de aplicar el valor por defecto. Corregido antes del commit; el dato importa porque es el que se mira para saber con qué se construyó el índice.
 - **Hallazgo (verificación de integridad):** los fragmentos se revisan **antes** de llamar a la API —vacíos, sin `fuente` y con texto repetido—, porque descubrir un fragmento vacío después de indexar obliga a reindexar y a pagar de nuevo. Un fragmento duplicado no lanza ningún error: ocupa dos lugares entre los candidatos y desplaza contenido que sí aporta.
-- **Evidencia:** 21 pruebas nuevas con embeddings falsos, incluida la persistencia real en un directorio temporal y la reconexión sin volver a embeber (288 en total). Corrida real: 6 documentos, 34 fragmentos, **una sola llamada de embedding** en lote, y reconexión desde otro proceso con el conteo y la metadata correctos (sección 9.10).
+- **Evidencia:** 21 pruebas nuevas con embeddings falsos, incluida la persistencia real en un directorio temporal y la reconexión sin volver a embeber (288 en total). Corrida real: 6 documentos, 31 fragmentos, **una sola llamada de embedding** en lote, y reconexión desde otro proceso con el conteo y la metadata correctos (sección 9.10).
 
 ##### Bloque 26: Recuperación semántica y prompt dinámico con citas
 
 - **Objetivo:** pasar de la búsqueda por palabra clave de `src/herramientas.py` a una búsqueda por significado, y armar con los fragmentos un prompt que obligue al modelo a citar de dónde sale cada afirmación.
 - **Implementación:** `recuperacion.py` con `formatear_contexto`, `recuperar`, `construir_prompt`, `responder`, `citas_usadas` y `verificar_citas`. Se reconecta al índice con `abrir_indice` en vez de reindexar, y reutiliza `verificar_indice` para cortar si el índice se construyó con otro modelo de embeddings.
-- **Decisión (k=3):** con 34 fragmentos de un párrafo, tres cubren la pregunta y su contexto inmediato. Más fragmentos diluyen la atención del modelo sobre los que importan; menos pierden el contexto que la cita necesita. El valor queda como constante configurable y el Bloque 27 mide el trade-off en lugar de confiarlo a la intuición.
+- **Decisión (k=3):** con 31 fragmentos de un párrafo, tres cubren la pregunta y su contexto inmediato. Más fragmentos diluyen la atención del modelo sobre los que importan; menos pierden el contexto que la cita necesita. El valor queda como constante configurable y el Bloque 27 mide el trade-off en lugar de confiarlo a la intuición.
 - **Decisión (las dos instrucciones juntas):** el prompt pide citar y, en la misma frase, admitir cuando el contexto no alcanza. "Cita tus fuentes" sin "admite cuando no sabes" produce citas inventadas para llenar el hueco.
 - **Decisión (verificar citas sin bloquear):** `verificar_citas` compara los números citados con el mapa real y devuelve problemas, pero no corta la respuesta. Bloquear obligaría a reintentar una llamada ya pagada; informar deja el problema visible en la traza, que es donde se revisa.
 - **Hallazgo (verificación en dos direcciones):** además de comprobar que la respuesta correcta cita bien, se probó con una pregunta **imposible** («¿cuál es el precio del dólar hoy en Chile?»). El modelo respondió que el contexto no alcanza y citó los tres fragmentos que revisó, sin inventar una cifra. Sin esa segunda prueba, un sistema que siempre responde algo parecería funcionar.
 - **Hallazgo (el patrón de cita se rompe con un recorrido manual):** la primera versión extraía las citas recorriendo carácter por carácter y acumulaba dígitos fuera de corchetes, así que un año suelto seguido de `]` se contaba como cita. Se reemplazó por un patrón regular, y quedó una prueba con `1991` entre paréntesis para que no vuelva.
 - **Diferencia con el material:** el material reindexa en este bloque para agregar `metadata` e `ids`. Como se agregaron en el Bloque 24, aquí no hubo reindexación ni un segundo pago de embeddings; solo se verificó que el índice existente sirviera.
 - **Evidencia:** 22 pruebas nuevas (310 en total) y las dos corridas reales de la sección 9.11, con el mapa de citas y la verificación manual de una cita.
+
+##### Bloque 27: Evaluación de la recuperación con precisión y recall
+
+- **Objetivo:** dejar de confiar en "a simple vista parece que trae lo correcto" y medir la recuperación con un conjunto de preguntas etiquetadas a mano.
+- **Implementación:** `evaluacion_recuperacion.py` con `precision_at_k`, `recall_at_k`, `promediar`, `evaluar_recuperacion`, `formatear_resultados` y `escribir_resultados`; 15 casos en `CASOS_EVALUACION` (13 respondibles y 2 imposibles); corridas guardadas en `resultados_evaluacion.txt` y `resultados_evaluacion_k5.txt`. `experimentos/listar_fragmentos.py` imprime los ids con su texto, que es lo que hace posible etiquetar leyendo el corpus.
+- **Hallazgo previo (fragmentos huérfanos):** al listar los fragmentos para etiquetar aparecieron colas de una línea (`"incorrecto es peor que ningún material."`, 30 caracteres) y un fragmento que era solo el título del documento. No responden nunca, pero ocupan un lugar entre los candidatos y desplazan a uno que sí. Se agregó una fusión de fragmentos cortos con el vecino del mismo documento, con tope para no mezclar temas: 34 → 31 fragmentos, mínimo 174 caracteres. Se corrigió **antes** de etiquetar, porque etiquetar sobre fragmentos basura es etiquetar basura.
+- **Decisión (un fragmento relevante por pregunta):** 13 de los 15 casos tienen un solo id relevante. No es pereza: con un id, el recall no puede ser menor que la precisión, y esa relación funciona como control de que las fórmulas y el `k` están bien usados. Dos casos quedan con el conjunto vacío —preguntas que el corpus no responde— y su recall sale `n/a`, excluido del promedio en lugar de contado como 0.
+- **Decisión (no sobrescribir):** `escribir_resultados` lanza `FileExistsError` si el archivo existe. Sobrescribir deja la corrida nueva y borra la referencia contra la que se quería comparar, que es exactamente lo que le da sentido a la medición.
+- **Decisión (leer la configuración del índice):** el material pide anotar a mano `k`, `chunk_size` y `chunk_overlap` en el archivo. Se leen de la metadata de la colección y se agrega el modelo de embeddings. Anotarlos a mano es un error silencioso esperando a ocurrir: dos corridas comparadas con la configuración mal escrita.
+- **Resultado (k=3):** precisión **0,289**, recall **1,000**. El fragmento correcto apareció en el top-3 en las **13** preguntas respondibles.
+- **Hallazgo (la precisión tiene techo):** con `k=3` y un fragmento relevante, el máximo de precisión es 1/3 = 0,33. Los 13 casos respondibles dieron exactamente 0,33 y los 2 imposibles 0,00, que da 0,289. Es decir, la precisión fue **máxima en todos los casos**, y el número bajo solo cuenta los dos lugares que sobran.
+- **Resultado (k=5):** precisión 0,173, recall 1,000. La precisión baja porque su techo pasa a 1/5, y el recall no mejora porque ya estaba en 1. Conclusión medida: subir `k` en este corpus no aporta y mete ruido al prompt. `k=3` queda justificado con números, no con intuición.
+- **Verificación (determinismo):** dos corridas consecutivas con la misma configuración produjeron archivos idénticos, así que las diferencias entre configuraciones son reales y no ruido del servicio.
+- **Evidencia:** 20 pruebas nuevas (335 en total) y las tres corridas reales de la sección 9.12.
 
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
@@ -700,6 +752,8 @@ Entre las posibles mejoras se encuentran:
 - **Dependencia de dos proveedores en el flujo RAG:** la generación usa DeepSeek y los embeddings usan Gemini, porque DeepSeek no ofrece embeddings. Si Gemini no responde, la recuperación no funciona aunque la generación sí: es una dependencia que hay que declarar y, más adelante, decidir si se mitiga con embeddings locales.
 - **El índice no se versiona y hay que reindexar cuando cambia el corpus:** `vectorstore/` está en `.gitignore` por ser contenido reconstructible. La contrapartida es que un clon nuevo del repositorio no trae índice y, si se edita `corpus/`, el índice queda desactualizado hasta correr `python indexar_corpus.py`.
 - **El corpus es una foto de la documentación, no la documentación:** los seis documentos de `corpus/` están escritos a mano y hay que mantenerlos sincronizados con el código. Un cambio en `src/costos.py` que no se refleje en `corpus/02_costos.md` produce respuestas correctas sobre un sistema que ya no existe.
+- **La precisión@k tiene techo 1/k:** con un solo fragmento relevante por pregunta, comparar precisión entre valores distintos de `k` mide cuántos lugares sobran, no la calidad de la búsqueda. Una comparación honesta entre configuraciones exige mirar el recall, o usar una métrica que no dependa de `k` (por ejemplo MRR o nDCG).
+- **El conjunto de evaluación tiene 15 casos y todos de un solo fragmento:** mide bien el caso "una pregunta, un fragmento que responde", y no cubre preguntas cuya respuesta está repartida en dos documentos. Ampliarlo a casos multi-fragmento exigiría otra relación de control, porque con varios ids relevantes el recall ya puede superar a la precisión.
 
 ## 12. Conclusión
 
