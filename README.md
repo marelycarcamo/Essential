@@ -78,6 +78,7 @@ Essential/
 │   ├── Evidencia_peticion_evidencia_autenticada_postman.png
 │   ├── limites_metrica.md
 │   ├── registro_pipeline_texto.txt
+│   ├── registro_prompts.json
 │   ├── resultados_metricas.json
 │   └── revision_manual.json
 ├── notebooks/
@@ -124,11 +125,14 @@ Essential/
 ├── decision.py
 ├── decision_personalizacion.md
 ├── evaluacion_recuperacion.py
+├── grafo_supervision.py
 ├── indexar_corpus.py
 ├── logging_rag.py
 ├── main.py
+├── matriz_riesgos.py
 ├── pytest.ini
 ├── recuperacion.py
+├── registro_prompts.py
 ├── registro_rag.py
 ├── registros_latencia_costo.jsonl
 ├── README.md
@@ -141,7 +145,9 @@ Essential/
 ├── test_evaluacion_recuperacion.py
 ├── test_indexar_corpus.py
 ├── test_logging_rag.py
+├── test_matriz_riesgos.py
 ├── test_recuperacion.py
+├── test_registro_prompts.py
 └── test_registro_rag.py
 
 ```
@@ -194,6 +200,13 @@ Essential/
 | `test_decision.py` | Pruebas del puntaje, del manejo de empates, del orden de las secciones y del resultado del caso real. |
 | `logging_rag.py` | Logging estructurado en JSON con `trace_id` por consulta (`ContextVar`), registro de consumo en tokens y filtro de inyección sobre la interfaz real de `Document`. Nunca registra el texto de la pregunta ni de los documentos: solo longitud, huella y fuente. |
 | `test_logging_rag.py` | Pruebas de los patrones de inyección, del aislamiento del `trace_id`, del registro de consumo y de que los logs no expongan contenido crudo. Incluye el caso del objeto con la interfaz equivocada (`contenido` en vez de `page_content`). |
+| `registro_prompts.py` | Historial versionado del prompt del sistema: huella, texto, autor, fecha, nota y modelo probado. Define `PROMPT_ACTIVO`, que es el texto que usa el servicio. |
+| `docs/registro_prompts.json` | El historial en disco: dos versiones del prompt, con sus huellas y notas de cambio. |
+| `grafo_supervision.py` | Punto de supervisión humana con LangGraph: pausa con `interrupt()`, reanuda con `Command`, rechaza una decisión que no sea booleana y verifica que el hilo tenga algo pendiente antes de aprobar. Con `--durable` usa un checkpointer en SQLite. |
+| `matriz_riesgos.py` | Siete riesgos propios del sistema con probabilidad × impacto, categoría, marca de límite, mitigación con su bloque y punto de supervisión para cada riesgo ALTO o CRÍTICO. |
+| `test_registro_prompts.py` | Pruebas de huellas, historial, idempotencia y del contrato que importa: la versión activa del servicio es la última registrada. |
+| `test_grafo_supervision.py` | Pruebas de la pausa, los caminos de aprobación y rechazo, el bloqueo de aprobaciones duplicadas y la durabilidad del checkpoint. |
+| `test_matriz_riesgos.py` | Pruebas de las fórmulas, los umbrales y el validador, con matrices rotas a propósito. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -413,6 +426,31 @@ python logging_rag.py
 ```
 
 Corre una consulta con un documento limpio y uno con intento de inyección, e imprime el registro auditable completo: eventos, `trace_id` compartido, documento descartado con su número de patrones y consumo en tokens. Al terminar, el `trace_id` vuelve a `None`, lo que confirma que el `ContextVar` se reseteó.
+
+### 8.14. Versionar el prompt del sistema
+
+```bash
+python registro_prompts.py
+```
+
+Registra (sin duplicar) las dos versiones del prompt del proyecto, imprime sus huellas, el diff entre la primera y la última, y guarda el historial en `docs/registro_prompts.json`. Falla con código 1 si `PROMPT_ACTIVO` no coincide con la última versión registrada: eso significaría que el servicio está usando un prompt que el historial no conoce.
+
+### 8.15. Ejecutar el punto de supervisión humana
+
+```bash
+python grafo_supervision.py                 # checkpointer en memoria
+python grafo_supervision.py --durable       # checkpointer en SQLite (checkpoints.db)
+```
+
+Muestra el camino completo: el grafo se invoca, se detiene en el `interrupt()` con la huella propuesta, y solo `Command(resume=True)` la activa. Después repite el flujo con un hilo nuevo para el **rechazo**, y confirma que una segunda aprobación del mismo hilo se bloquea.
+
+### 8.16. Evaluar la matriz de riesgos
+
+```bash
+python matriz_riesgos.py
+```
+
+Imprime los siete riesgos ordenados por puntaje, marca los que están a un punto de cambiar de categoría, lista el punto de supervisión de cada riesgo ALTO o CRÍTICO y valida la matriz. Sale con código 1 si alguna fila ALTA o CRÍTICA no tiene supervisión.
 
 ## 9. Pruebas y validación
 
@@ -743,6 +781,49 @@ Qué se puede reconstruir mirando **solo los logs**, sin ver la ejecución: que 
 
 **Y el filtro no es infalible, por diseño:** es una lista negra. Un documento que hable de seguridad puede activar un patrón y ser descartado sin ser un ataque; un ataque con sinónimos o en otro idioma pasa sin ser visto. Por eso el sistema no confía solo en él: si todos los documentos quedan descartados, **no se llama al modelo** y se responde `RESPUESTA_SIN_CONTEXTO`, con un evento `sin_contexto_confiable` que deja constancia de por qué.
 
+### 9.17. Versionado del prompt, supervisión humana y matriz de riesgos (Bloque 32)
+
+**Historial del prompt.** Dos versiones registradas, con huella calculada sobre el texto exacto:
+
+| Huella | Versión | Qué cambió |
+|---|---|---|
+| `54a9cf06a567` | v1 (Bloque 26) | contexto obligatorio, cita numerada y admisión de no saber |
+| `25edb0d3427d` | v2 (Bloque 31) — **activa** | el contenido del contexto es material para citar, no instrucciones |
+
+El servicio importa `PROMPT_ACTIVO` y no una copia del texto: un prompt duplicado en dos archivos se desincroniza, y entonces la huella que registra la respuesta deja de identificar lo que se envió de verdad. Una prueba fija ese contrato (`la version activa es la ultima registrada`).
+
+**Punto de supervisión humana.** Corrida real del grafo:
+
+```text
+1) tras invocar: {'huella_nueva': 'ba2bcb4f4f13', '__interrupt__': [Interrupt(value={'motivo': 'aprobar nueva version de prompt en produccion', 'huella_propuesta': 'ba2bcb4f4f13'}...)]}
+2) pendiente: {'motivo': 'aprobar nueva version de prompt en produccion', 'huella_propuesta': 'ba2bcb4f4f13'}
+   ¿sigue pendiente? True
+3) tras aprobar: {'huella_nueva': 'ba2bcb4f4f13', 'aprobado': True, 'aplicado': True}
+   ¿sigue pendiente? False
+
+--- camino de rechazo (hilo nuevo) ---
+4) tras rechazar: {'huella_nueva': 'ba2bcb4f4f13', 'aprobado': False, 'aplicado': False}
+5) segunda aprobación del mismo hilo: este thread_id no tiene ninguna aprobacion pendiente
+```
+
+Tres cosas quedan demostradas, no descritas: el grafo **se detiene de verdad** (el nodo `aplicar` no corrió), el **rechazo** es un camino real y no un error no manejado, y **una aprobación duplicada se bloquea** en lugar de aplicarse dos veces sobre un hilo que ya se resolvió.
+
+**Matriz de riesgos.** Siete riesgos propios, ordenados por puntaje:
+
+| Categoría | Puntaje | Riesgo | Punto de supervisión |
+|---|---:|---|---|
+| CRÍTICO | 15 | Fuga de datos personales en los logs | Revisión humana de los logs antes de cada entrega |
+| ALTO | 12 | Inyección vía documento indexado | Revisión de `documento_descartado_por_inyeccion` antes de indexar |
+| ALTO | 12 | Cita inexistente o inventada | Revisión de respuestas con `problemas_citas` |
+| ALTO | 12 | Índice desactualizado respecto del código | Revisión del diff de fuentes antes de reindexar |
+| ALTO | 10 | Despliegue de prompt sin validar | Grafo con `interrupt()`: sin aprobación no se activa |
+| ALTO | 9 | Caída del proveedor de embeddings | Alerta al operador; sin índice no responde |
+| MEDIO | 4 | Costo por consultas repetidas | — (no lo exige) |
+
+**Hallazgo honesto:** con los umbrales del programa (4, 9 y 15) sobre una escala de 1 a 5, **las siete filas quedan "a un punto del límite"**. No es un error de cálculo ni de las filas: es que las categorías son gruesas, y casi cualquier producto cae cerca de un umbral. La consecuencia práctica es que la marca "[AL LÍMITE]" no discrimina; lo que ordena el trabajo es el **puntaje**, y por eso la tabla está ordenada por él.
+
+**Lo que la matriz obliga a admitir:** el riesgo más grave del sistema no es el RAG. Es que los logs anden mal. Un índice mediocre da respuestas pobres; un log con la pregunta de un usuario en texto plano da una filtración, y por eso ese riesgo es el único CRÍTICO.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -911,6 +992,20 @@ Qué se puede reconstruir mirando **solo los logs**, sin ver la ejecución: que 
 - **Hallazgo (el `usage_metadata` exige `total_tokens`):** construir un `AIMessage` con solo entrada y salida lanza `ValidationError`. El bloque de consumo lo lee con `.get`, así que un proveedor que no informe uso no rompe el flujo: registra `None`, que es el dato honesto.
 - **Evidencia:** 23 pruebas nuevas (416 en total) y la traza completa de la sección 9.16.
 
+##### Bloque 32: Versionado de prompts, supervisión humana y matriz de riesgos
+
+- **Objetivo:** que el prompt deje de ser un string suelto, que desplegarlo exija una decisión humana real y que los riesgos del sistema estén puntuados con un mecanismo concreto detrás.
+- **Implementación:** `registro_prompts.py` (huella, historial, diff, persistencia en `docs/registro_prompts.json`), `grafo_supervision.py` (LangGraph con `interrupt()` y `Command`, checkpointer en memoria o SQLite) y `matriz_riesgos.py` (7 riesgos, puntaje, categoría, marca de límite y validador).
+- **Decisión (el prompt vive en un solo lugar):** `recuperacion.py` importa `PROMPT_ACTIVO` en vez de tener su copia del texto. Un prompt duplicado en dos archivos se desincroniza, y la huella que registra cada respuesta dejaría de identificar el texto enviado. Una prueba fija el contrato: la versión activa es la última registrada.
+- **Decisión (v2 en vez de v1):** la versión activa agrega que el contenido del contexto es material para citar y no instrucciones. La v1 no distinguía esas dos cosas, que es exactamente el vector de inyección del Bloque 31.
+- **Decisión (registro idempotente):** correr `registro_prompts.py` dos veces no infla el historial. Si lo inflara, "cuántas versiones hubo" dejaría de ser un dato.
+- **Decisión (la decisión debe ser booleana):** el nodo de supervisión rechaza cualquier `Command(resume=...)` que no sea `True` o `False`. Con `resume="no"` la versión se activaría, porque un texto no vacío es verdadero en Python, y el rechazo se convertiría en aprobación sin que nadie lo note.
+- **Decisión (verificar el hilo antes de reanudar):** `resolver` falla si el hilo no tiene nada pendiente. Reanudar un hilo resuelto no lanza excepción: devuelve el estado final o aplica la decisión a otra solicitud. Un punto de supervisión que aprueba algo que nadie miró da la falsa garantía de que hubo control.
+- **Decisión (checkpointer durable disponible):** `--durable` guarda los checkpoints en SQLite. En un sistema real la persona aprueba horas después, probablemente con otro proceso; con `InMemorySaver` el estado pausado no sobrevive al reinicio y el `Command(resume=True)` falla.
+- **Hallazgo (todas las filas al límite):** con umbrales 4/9/15 sobre una escala 1–5, las siete filas de la matriz quedan a un punto de cambiar de categoría. La marca no discrimina; lo que ordena el trabajo es el puntaje. Queda documentado en lugar de ajustar los números para que la etiqueta se vea mejor.
+- **Hallazgo (el riesgo crítico no es el RAG):** el único riesgo CRÍTICO es la fuga de datos personales en los logs. Un índice mediocre produce respuestas pobres; un log con la pregunta de un usuario en texto plano produce una filtración.
+- **Evidencia:** 64 pruebas nuevas (480 en total): 20 de registro de prompts, 15 del grafo (incluida la durabilidad del checkpoint) y 30 de la matriz.
+
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
 - Ampliar el conjunto de comentarios de prueba.
@@ -934,6 +1029,8 @@ Entre las posibles mejoras se encuentran:
 - **El dataset de tuning no se envió:** tiene 13 ejemplos validados, el mínimo que pide la actividad y muy por debajo de los 200 que el método de decisión considera suficientes. Enviarlo hoy entrenaría un modelo sobre una muestra que no sostiene generalización.
 - **El corpus del índice son documentos escritos a mano, no las fuentes reales:** 6 archivos de `corpus/` frente a 17 fuentes del proyecto que no están indexadas. Mientras eso siga así, el sistema responde sobre una descripción del código y no sobre el código.
 - **El filtro de inyección es una lista negra:** reconoce seis patrones fijos. Un ataque con sinónimos, en otro idioma o con las letras separadas pasa sin ser visto, y un documento legítimo sobre seguridad puede ser descartado. Es una barrera barata entre varias, no una garantía.
+- **La supervisión humana corre sobre `InMemorySaver` por defecto:** el estado pausado no sobrevive a un reinicio. `--durable` lo guarda en SQLite y está probado, pero la aprobación real de una persona en otro proceso todavía no tiene interfaz: hoy se reanuda con una línea de código.
+- **La matriz de riesgos es una foto:** se puntuó una vez, con el sistema en su estado actual. Sin revisión periódica se convierte en un documento que nadie mira; la marca de "al límite" no ayuda a priorizar porque, con estos umbrales, casi todas las filas la tienen.
 
 ## 12. Conclusión
 

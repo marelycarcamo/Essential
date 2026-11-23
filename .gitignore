@@ -27,3 +27,7 @@ material_generado/
 # Se versiona el script que lo construye, no el índice (binarios que crecen y
 # cambian con cada consulta).
 vectorstore/
+
+# Checkpoints durables del grafo de supervisión: estado de ejecución, no código.
+# Se regeneran solos; se versiona el grafo que los produce.
+checkpoints.db
