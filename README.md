@@ -8,6 +8,31 @@ La solución utiliza la API de OpenRouter para ejecutar tres prompts especializa
 
 El proyecto busca evaluar tanto el funcionamiento de los prompts como la consistencia estructural y semántica de las respuestas generadas.
 
+## 1.1. Inicio rápido: instalar, indexar y consultar (Gate 2)
+
+Desde un clon limpio, en Windows. En macOS o Linux cambia la ruta del intérprete por `source .venv/bin/activate` y `python` por `python3`.
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env          # y completa GEMINI_API_KEY y DEEPSEEK_API_KEY
+python indexar_corpus.py        # crea el índice en vectorstore/ (6 documentos, 31 fragmentos)
+python verificar_entorno.py     # debe terminar en "Entorno listo para la corrida final"
+python servicio_rag.py          # responde con citas, traza y consumo
+python -m pytest test_gate2.py -v   # los 4 criterios no compensables
+```
+
+| Pieza | Dónde |
+|---|---|
+| Corpus a indexar | `corpus/` (6 documentos del proyecto) |
+| Índice persistido | `vectorstore/` — se crea con `indexar_corpus.py`, no se versiona |
+| Servicio que responde | `servicio_rag.py` — recupera, filtra, cita, genera y registra |
+| Punto de supervisión humana | `grafo_supervision.py` — pausa con `interrupt()` y reanuda con `Command` |
+| Ensayo con proveedores reales | `ensayo_gate2.py` — deja registro en `docs/registro_ensayo_gate2.md` |
+| Pruebas de los 4 criterios | `test_gate2.py` |
+| Suite completa | `python -m pytest` — 500 pruebas, sin red |
+
 ## 2. Objetivos
 
 - Construir un banco de prompts reutilizable.
@@ -125,6 +150,7 @@ Essential/
 ├── decision.py
 ├── decision_personalizacion.md
 ├── evaluacion_recuperacion.py
+├── ensayo_gate2.py
 ├── grafo_supervision.py
 ├── indexar_corpus.py
 ├── logging_rag.py
@@ -140,15 +166,20 @@ Essential/
 ├── resultados_evaluacion.txt
 ├── resultados_evaluacion_k5.txt
 ├── revision_manual.py
+├── servicio_rag.py
 ├── test_dataset_tuning.py
 ├── test_decision.py
 ├── test_evaluacion_recuperacion.py
+├── test_gate2.py
+├── test_grafo_supervision.py
 ├── test_indexar_corpus.py
+├── test_indice_incremental.py
 ├── test_logging_rag.py
 ├── test_matriz_riesgos.py
 ├── test_recuperacion.py
 ├── test_registro_prompts.py
-└── test_registro_rag.py
+├── test_registro_rag.py
+└── verificar_entorno.py
 
 ```
 
@@ -207,6 +238,11 @@ Essential/
 | `test_registro_prompts.py` | Pruebas de huellas, historial, idempotencia y del contrato que importa: la versión activa del servicio es la última registrada. |
 | `test_grafo_supervision.py` | Pruebas de la pausa, los caminos de aprobación y rechazo, el bloqueo de aprobaciones duplicadas y la durabilidad del checkpoint. |
 | `test_matriz_riesgos.py` | Pruebas de las fórmulas, los umbrales y el validador, con matrices rotas a propósito. |
+| `servicio_rag.py` | El servicio integrado del Gate 2: sincroniza el índice de forma incremental, recupera, filtra, cita, genera y registra, todo bajo un mismo `trace_id`. Recibe el índice y el modelo por parámetro para poder probarse sin red. |
+| `test_gate2.py` | Los cuatro criterios no compensables verificados con un comando: pipeline sin excepciones, respuesta con cita, logs sin contenido crudo y supervisión que pausa y reanuda. |
+| `ensayo_gate2.py` | Ensayo funcional con proveedores reales: indexa desde cero en `vectorstore_ensayo/`, responde, verifica los cuatro criterios y deja el registro del ensayo. |
+| `verificar_entorno.py` | Comprueba Python, cada librería, las claves y el índice antes de la corrida final. Termina en "Entorno listo para la corrida final" o dice qué falta. |
+| `test_indice_incremental.py` | Pruebas de la sincronización del índice: no duplica, reemplaza lo modificado, elimina lo que ya no existe y no gasta embeddings si nada cambió. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -367,10 +403,13 @@ Genera una respuesta por consulta, calcula las tres métricas y guarda `docs/res
 ### 8.7. Indexar el corpus documental
 
 ```bash
-python indexar_corpus.py
+python indexar_corpus.py                # sincronización incremental (recomendada)
+python indexar_corpus.py --completo     # borra el índice y lo reconstruye entero
 ```
 
-Lee los seis documentos de `corpus/`, los parte en fragmentos, calcula un embedding real por fragmento y los persiste en `vectorstore/`. Deja impreso el número de documentos, el de fragmentos y la metadata de la colección. Se corre **una vez**, o cada vez que cambie el corpus: la recuperación se reconecta al índice y no vuelve a calcular embeddings.
+Lee los seis documentos de `corpus/`, compara la huella de cada uno con la guardada en el índice y trabaja **solo con la diferencia**: agrega los nuevos, reemplaza los modificados, elimina los que ya no existen y no gasta una sola llamada de embedding si nada cambió. Deja impreso qué hizo.
+
+`--completo` es la única forma de cambiar `chunk_size` o el modelo de embeddings: un índice viejo con otra configuración no se puede "parchar", hay que rehacerlo.
 
 `vectorstore/` está en `.gitignore` porque es contenido generado y se puede reconstruir con este comando. Para comprobar que el índice quedó bien, `python experimentos/verificar_indice.py`.
 
@@ -451,6 +490,32 @@ python matriz_riesgos.py
 ```
 
 Imprime los siete riesgos ordenados por puntaje, marca los que están a un punto de cambiar de categoría, lista el punto de supervisión de cada riesgo ALTO o CRÍTICO y valida la matriz. Sale con código 1 si alguna fila ALTA o CRÍTICA no tiene supervisión.
+
+### 8.17. Correr el servicio completo
+
+```bash
+python servicio_rag.py
+python servicio_rag.py --pregunta "¿cómo se calcula el costo?" --k 5
+python servicio_rag.py --supervision      # además, el grafo de aprobación
+```
+
+Sincroniza el índice de forma incremental (si el corpus no cambió, no embebe nada), recupera los `k` fragmentos más parecidos, filtra los sospechosos, arma el prompt, genera la respuesta e imprime el registro auditable completo: `trace_id`, fuentes y un evento por etapa con el consumo en tokens y la huella del prompt.
+
+### 8.18. Ensayo funcional con proveedores reales
+
+```bash
+python ensayo_gate2.py
+```
+
+Indexa el corpus desde cero en `vectorstore_ensayo/` (sin tocar el índice de trabajo), responde una consulta real con DeepSeek, ejecuta el punto de supervisión y verifica los cuatro criterios no compensables sobre esa corrida. Guarda el registro en `docs/registro_ensayo_gate2.md`. Cuesta del orden de US$ 0,0002.
+
+### 8.19. Verificar el entorno
+
+```bash
+python verificar_entorno.py
+```
+
+Comprueba versión de Python, las siete librerías del servicio, las dos claves de API (sin imprimir su valor) y el índice persistido. Es lo primero que conviene correr en una máquina distinta de la de desarrollo.
 
 ## 9. Pruebas y validación
 
@@ -824,6 +889,48 @@ Tres cosas quedan demostradas, no descritas: el grafo **se detiene de verdad** (
 
 **Lo que la matriz obliga a admitir:** el riesgo más grave del sistema no es el RAG. Es que los logs anden mal. Un índice mediocre da respuestas pobres; un log con la pregunta de un usuario en texto plano da una filtración, y por eso ese riesgo es el único CRÍTICO.
 
+### 9.18. Ensayo funcional en vivo y rúbrica del Gate 2 (Bloque S1)
+
+Corrida real de `python ensayo_gate2.py`: índice reconstruido desde cero en un directorio aparte, 31 fragmentos, una consulta real al modelo y el grafo de supervisión.
+
+```text
+== Paso 1: indexar el corpus desde cero ==
+fragmentos en el índice del ensayo: 31
+
+== Verificación de los criterios no compensables ==
+  OK   pipeline_corre_de_punta_a_punta
+  OK   respuestas_citan_fuente
+  OK   logs_sin_contenido_crudo
+  OK   supervision_humana_funciona
+Ensayo completo: todos los criterios cumplidos.
+```
+
+**Respuesta real producida:** *"Ante un HTTP 401, el cliente clasifica el error como `ErrorAutenticacion`: la credencial no sirve y esperar no la arregla, así que **no se reintenta** `[1] (01_cliente_modular.md)`."* Nombra el archivo, así que se puede verificar sin abrir la traza.
+
+**Hallazgo del ensayo (y por qué existe el versionado de prompts):** la primera corrida **falló** el criterio de citación. La respuesta citaba `[1]` correctamente, pero no nombraba el archivo, así que un lector no podía verificar de dónde salía la afirmación. Se corrigió el prompt —no la prueba— y ese cambio quedó registrado como **v3** con su huella. Es el caso de uso exacto para el que se construyó el registro en el Bloque 32, apareciendo solo.
+
+**Segundo hallazgo del ensayo:** `abrir_indice` creaba la colección sin la metadata del modelo de embeddings, y `from_documents` no la aplica sobre una colección que ya existe. Resultado: el índice nacía sin poder declarar con qué modelo se construyó. Se corrigió construyendo sin abrir primero, y recreando cualquier colección vacía. Lo detectó el ensayo, no una prueba unitaria: las piezas funcionaban por separado.
+
+#### Autoevaluación contra la rúbrica
+
+| Dimensión | Peso | Puntaje estimado | Base |
+|---|---:|---:|---|
+| Pipeline RAG funcional | 25% | 95 | `servicio_rag.py` corre de punta a punta; índice persistido e incremental |
+| Calidad de la recuperación y citación | 15% | 90 | recall 1,000 y precisión máxima en 13/13 casos; citas verificadas a mano |
+| Costo, latencia y checklist | 10% | 90 | corrida real con tokens y costo por componente; latencia por etapa |
+| Personalización justificada | 15% | 95 | 15 casos del método, decisión RAG con evidencia medida |
+| Observabilidad y trazabilidad | 15% | 90 | `trace_id` por consulta, un evento por etapa, logs sin contenido crudo |
+| Seguridad, versionado y gobernanza | 20% | 90 | filtro de inyección, 3 versiones de prompt, supervisión real, 7 riesgos |
+
+| Criterio no compensable | Cumple |
+|---|---|
+| Pipeline corre de punta a punta | sí |
+| Cada respuesta cita su fuente | sí |
+| Logs sin contenido crudo sensible | sí |
+| Supervisión humana funciona de verdad | sí |
+
+**Promedio ponderado estimado: 92,0.** Está por encima del 80 %, con los cuatro criterios no compensables en verde. Los puntajes son estimación propia, no nota: el valor de escribirlos es que obligan a mirar cada dimensión con su evidencia al lado.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -1006,6 +1113,24 @@ Tres cosas quedan demostradas, no descritas: el grafo **se detiene de verdad** (
 - **Hallazgo (el riesgo crítico no es el RAG):** el único riesgo CRÍTICO es la fuga de datos personales en los logs. Un índice mediocre produce respuestas pobres; un log con la pregunta de un usuario en texto plano produce una filtración.
 - **Evidencia:** 64 pruebas nuevas (480 en total): 20 de registro de prompts, 15 del grafo (incluida la durabilidad del checkpoint) y 30 de la matriz.
 
+##### Bloque 25 (pendiente hasta el Gate 2): actualización incremental del índice
+
+- **Origen:** el Gate 2 exige el índice persistido **y la actualización incremental del Bloque 25**. La primera versión de `indexar_corpus.py` reconstruía todo y obligaba a borrar `vectorstore/` antes de reindexar; el hueco se detectó al leer el Gate, no al escribir el Bloque 24.
+- **Implementación:** `actualizar_indice` compara la huella de contenido de cada documento (`huella_fuente`, en la metadata) con la guardada en el índice y trabaja solo con la diferencia: agrega, reemplaza y elimina. `huellas_indexadas` y `_indice_existe` sostienen esa comparación.
+- **Decisión (eliminar lo que ya no está):** si un documento se borra del corpus y sus fragmentos quedan en el índice, el sistema sigue respondiendo con documentación borrada y la cita se ve perfectamente válida. El usuario no tiene forma de notarlo.
+- **Decisión (un documento modificado se borra entero antes de reindexar):** agregar solo los fragmentos nuevos dejaría los viejos respondiendo con el contenido anterior.
+- **Hallazgo (la colección nace sin metadata):** `abrir_indice` crea la colección sin `collection_metadata`, y `from_documents` no la aplica sobre una colección existente. El índice quedaba sin poder declarar su modelo de embeddings. Se corrigió verificando el disco antes de abrir, y recreando cualquier colección vacía.
+- **Evidencia:** 11 pruebas nuevas y la corrida real: primera pasada sobre el índice viejo reindexa 6 documentos (31 fragmentos); segunda pasada, **0 fragmentos y 0 llamadas a la API**.
+
+##### Gate 2: entrega del servicio IA modular con RAG (Bloque S1)
+
+- **Entrega:** `servicio_rag.py` como servicio único, `test_gate2.py` con los cuatro criterios no compensables, `ensayo_gate2.py` con la corrida real y `verificar_entorno.py` para una máquina limpia.
+- **Decisión (el servicio recibe el índice y el modelo por parámetro):** así los cuatro criterios se verifican en cada corrida de la suite, con embeddings deterministas y un modelo doble, sin red ni cuota. Si la prueba usara el proveedor real, se correría una vez y con suerte; y un criterio no compensable no puede depender de la suerte.
+- **Decisión (el ensayo corre aparte):** `ensayo_gate2.py` sí usa los proveedores reales y un directorio de índice separado, para que probar "indexar desde cero" no dependa de tener el índice de trabajo al día ni lo ensucie.
+- **Hallazgo (citación incompleta):** la primera corrida real falló el criterio de citación: la respuesta citaba `[1]` pero no nombraba el archivo. Se corrigió el **prompt** (v3), no la prueba, porque el problema era real: un lector sin acceso a la traza no podía verificar la afirmación. El cambio quedó registrado con su huella en `docs/registro_prompts.json`.
+- **Hallazgo (citar sin nombre):** el contexto numerado tampoco incluía el archivo de origen de cada fragmento, así que el modelo no tenía cómo nombrarlo aunque quisiera. `formatear_contexto` ahora emite `[1] (archivo.md) texto`.
+- **Evidencia:** 9 pruebas de Gate (501 en total) y el registro del ensayo en `docs/registro_ensayo_gate2.md`, con los cuatro criterios en verde.
+
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
 - Ampliar el conjunto de comentarios de prueba.
@@ -1031,6 +1156,8 @@ Entre las posibles mejoras se encuentran:
 - **El filtro de inyección es una lista negra:** reconoce seis patrones fijos. Un ataque con sinónimos, en otro idioma o con las letras separadas pasa sin ser visto, y un documento legítimo sobre seguridad puede ser descartado. Es una barrera barata entre varias, no una garantía.
 - **La supervisión humana corre sobre `InMemorySaver` por defecto:** el estado pausado no sobrevive a un reinicio. `--durable` lo guarda en SQLite y está probado, pero la aprobación real de una persona en otro proceso todavía no tiene interfaz: hoy se reanuda con una línea de código.
 - **La matriz de riesgos es una foto:** se puntuó una vez, con el sistema en su estado actual. Sin revisión periódica se convierte en un documento que nadie mira; la marca de "al límite" no ayuda a priorizar porque, con estos umbrales, casi todas las filas la tienen.
+- **El punto de supervisión no tiene interfaz:** `interrupt()` entrega el diccionario y `Command(resume=True)` lo reanuda, pero la aprobación hoy ocurre en una línea de código. En un sistema real la persona aprueba desde una interfaz, horas después, y con `InMemorySaver` el estado no sobrevive a ese reinicio: `--durable` existe y está probado, pero falta la interfaz que lo consuma.
+- **El corpus sigue siendo una descripción del código:** 6 documentos escritos a mano frente a 17 fuentes reales del proyecto (13 módulos de `src/`, 2 de `docs/`, 2 de la raíz). La actualización incremental ya permite agregarlas sin costo, pero mientras no estén indexadas el sistema responde sobre una descripción y no sobre el código.
 
 ## 12. Conclusión
 

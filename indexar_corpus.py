@@ -35,6 +35,7 @@ Uso
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sys
@@ -85,7 +86,10 @@ def cargar_documentos(directorio: Path = DIRECTORIO_CORPUS) -> list[Document]:
 
     Returns:
         Un ``Document`` por archivo, en orden alfabético, con
-        ``metadata["fuente"]`` igual al nombre del archivo.
+        ``metadata["fuente"]`` igual al nombre del archivo y
+        ``metadata["huella_fuente"]`` con la huella de su contenido. La huella es
+        lo que permite actualizar el índice de forma incremental: sin ella no se
+        puede saber si un documento cambió sin volver a embeberlo.
 
     Raises:
         ErrorCorpus: si el directorio no existe o no contiene archivos ``.md``.
@@ -98,13 +102,21 @@ def cargar_documentos(directorio: Path = DIRECTORIO_CORPUS) -> list[Document]:
     if not archivos:
         raise ErrorCorpus(f"El directorio del corpus no tiene archivos .md: {directorio}")
 
-    documentos = [
-        Document(
-            page_content=archivo.read_text(encoding="utf-8"),
-            metadata={"fuente": archivo.name},
+    documentos = []
+    for archivo in archivos:
+        contenido = archivo.read_text(encoding="utf-8")
+        documentos.append(
+            Document(
+                page_content=contenido,
+                metadata={
+                    "fuente": archivo.name,
+                    "huella_fuente": hashlib.sha256(
+                        contenido.encode("utf-8")
+                    ).hexdigest()[:12],
+                },
+            )
         )
-        for archivo in archivos
-    ]
+
     logger.info("Cargados %d documentos desde %s", len(documentos), directorio)
     return documentos
 
@@ -357,6 +369,147 @@ def abrir_indice(
     )
 
 
+def actualizar_indice(
+    embeddings: Embeddings,
+    documentos: list[Document],
+    directorio: Path = DIRECTORIO_VECTORSTORE,
+    modelo_embeddings: str = MODELO_EMBEDDINGS,
+) -> dict:
+    """Agrega al índice solo los documentos nuevos o modificados.
+
+    ``from_documents`` recalcula todo el corpus y, si se corre sobre un índice que
+    ya tiene contenido, **duplica** los fragmentos. Reindexar entero para agregar
+    un documento es caro y propenso a ese error; esta función compara la huella de
+    cada documento con la que quedó guardada al indexarlo y trabaja solo con la
+    diferencia.
+
+    Si el índice está vacío, delega en ``indexar_corpus`` para que quede con su
+    metadata de colección (modelo y parámetros) desde el principio.
+
+    Returns:
+        Un resumen con las fuentes agregadas, actualizadas y omitidas, y cuántos
+        fragmentos se embeberon en esta pasada.
+    """
+
+    if not _indice_existe(directorio):
+        return _construir_desde_cero(embeddings, documentos, directorio, modelo_embeddings)
+
+    vectorstore = abrir_indice(embeddings, directorio)
+
+    if vectorstore._collection.count() == 0:
+        # La colección existe pero está vacía (una corrida interrumpida, por
+        # ejemplo). Se borra y se reconstruye: una colección ya creada no acepta
+        # la metadata de colección después, y sin ella el índice no puede
+        # declarar con qué modelo se construyó.
+        vectorstore.delete_collection()
+        return _construir_desde_cero(embeddings, documentos, directorio, modelo_embeddings)
+
+    existentes = huellas_indexadas(vectorstore)
+    agregados: list[Document] = []
+    actualizados: list[Document] = []
+    omitidos: list[str] = []
+
+    for documento in documentos:
+        fuente = documento.metadata["fuente"]
+        huella_actual = documento.metadata.get("huella_fuente")
+        if fuente not in existentes:
+            agregados.append(documento)
+        elif existentes[fuente] != huella_actual:
+            actualizados.append(documento)
+        else:
+            omitidos.append(fuente)
+
+    # Un documento actualizado se borra entero antes de reindexarlo: si solo se
+    # agregaran los fragmentos nuevos, los viejos seguirían respondiendo con el
+    # contenido anterior y la búsqueda devolvería las dos versiones.
+    for documento in actualizados:
+        vectorstore.delete(where={"fuente": documento.metadata["fuente"]})
+
+    # Un documento que ya no está en el corpus también hay que sacarlo: dejarlo
+    # significa seguir respondiendo con documentación borrada, y el usuario no
+    # tiene forma de saberlo porque la cita se ve perfectamente válida.
+    presentes = {documento.metadata["fuente"] for documento in documentos}
+    eliminadas = sorted(set(existentes) - presentes)
+    for fuente in eliminadas:
+        vectorstore.delete(where={"fuente": fuente})
+        logger.warning("Fuente eliminada del índice: %s", fuente)
+
+    por_indexar = agregados + actualizados
+    fragmentos = partir_documentos(por_indexar) if por_indexar else []
+
+    if fragmentos:
+        problemas = verificar_fragmentos(fragmentos)
+        if problemas:
+            raise ErrorCorpus("Fragmentos con problemas: " + "; ".join(problemas))
+        vectorstore.add_documents(fragmentos, ids=construir_ids(fragmentos))
+
+    logger.info(
+        "Índice actualizado: %d agregadas, %d actualizadas, %d eliminadas, %d omitidas, %d fragmentos",
+        len(agregados),
+        len(actualizados),
+        len(eliminadas),
+        len(omitidos),
+        len(fragmentos),
+    )
+
+    return {
+        "agregadas": [d.metadata["fuente"] for d in agregados],
+        "actualizadas": [d.metadata["fuente"] for d in actualizados],
+        "eliminadas": eliminadas,
+        "omitidas": omitidos,
+        "fragmentos": len(fragmentos),
+        "indice_vacio": False,
+    }
+
+
+def _indice_existe(directorio: Path = DIRECTORIO_VECTORSTORE) -> bool:
+    """Indica si el directorio del índice tiene contenido en disco."""
+
+    return directorio.is_dir() and any(directorio.iterdir())
+
+
+def _construir_desde_cero(
+    embeddings: Embeddings,
+    documentos: list[Document],
+    directorio: Path,
+    modelo_embeddings: str,
+) -> dict:
+    """Construye el índice completo con su metadata de colección."""
+
+    fragmentos = partir_documentos(documentos)
+    indexar_corpus(
+        embeddings,
+        fragmentos,
+        directorio=directorio,
+        metadatos=metadatos_coleccion(modelo_embeddings),
+    )
+    return {
+        "agregadas": [documento.metadata["fuente"] for documento in documentos],
+        "actualizadas": [],
+        "eliminadas": [],
+        "omitidas": [],
+        "fragmentos": len(fragmentos),
+        "indice_vacio": True,
+    }
+
+
+def huellas_indexadas(vectorstore: Chroma) -> dict[str, str | None]:
+    """Devuelve la huella de contenido guardada por cada fuente del índice.
+
+    Un índice construido antes de que existiera ``huella_fuente`` devuelve
+    ``None`` para sus fuentes, y eso hace que se reindexen una vez: es preferible
+    a asumir que no cambiaron.
+    """
+
+    datos = vectorstore.get(include=["metadatas"])
+    huellas: dict[str, str | None] = {}
+    for metadatos in datos.get("metadatas") or []:
+        if not metadatos or "fuente" not in metadatos:
+            continue
+        huellas[metadatos["fuente"]] = metadatos.get("huella_fuente")
+    return huellas
+
+
 def verificar_indice(
     vectorstore: Chroma,
     modelo_esperado: str = MODELO_EMBEDDINGS,
@@ -399,17 +552,42 @@ def construir_embeddings() -> GoogleGenerativeAIEmbeddings:
     return GoogleGenerativeAIEmbeddings(model=MODELO_EMBEDDINGS)
 
 
-def main() -> int:
-    """Indexa el corpus desde cero y comprueba que quedó persistido en disco."""
+def main(argumentos: list[str] | None = None) -> int:
+    """Sincroniza el índice con el corpus: incremental por defecto.
+
+    ``--completo`` borra ``vectorstore/`` y lo reconstruye entero. Es la única
+    forma de cambiar ``chunk_size`` o el modelo de embeddings, porque un índice
+    viejo con otra configuración no se puede "parchar": hay que rehacerlo.
+    """
+
+    import argparse
+    import shutil
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     load_dotenv()
 
+    parser = argparse.ArgumentParser(description="Indexa o actualiza el corpus.")
+    parser.add_argument(
+        "--completo",
+        action="store_true",
+        help="borra el índice y lo reconstruye entero (cambia chunk_size o modelo)",
+    )
+    opciones = parser.parse_args(argumentos)
+
     try:
         documentos = cargar_documentos()
-        fragmentos = partir_documentos(documentos)
         embeddings = construir_embeddings()
-        indexar_corpus(embeddings, fragmentos)
+
+        if opciones.completo and DIRECTORIO_VECTORSTORE.exists():
+            shutil.rmtree(DIRECTORIO_VECTORSTORE)
+            logger.warning("Índice anterior borrado: reconstrucción completa solicitada")
+
+        if opciones.completo:
+            fragmentos = partir_documentos(documentos)
+            indexar_corpus(embeddings, fragmentos)
+            detalle = {"agregadas": [d.metadata["fuente"] for d in documentos], "actualizadas": [], "eliminadas": [], "omitidas": [], "fragmentos": len(fragmentos)}
+        else:
+            detalle = actualizar_indice(embeddings, documentos)
 
         # La prueba de que persistió no es que el script corra: es que una
         # conexión nueva al mismo directorio devuelva el mismo contenido.
@@ -419,9 +597,10 @@ def main() -> int:
         logger.error("No se pudo indexar el corpus: %s", error)
         return 1
 
-    print(f"Documentos: {len(documentos)}")
-    print(f"Fragmentos: {len(fragmentos)}")
-    print(f"Persistido en {DIRECTORIO_VECTORSTORE}/: {resumen['fragmentos']} fragmentos")
+    print(f"Documentos en el corpus: {len(documentos)}")
+    print(f"Agregadas: {len(detalle['agregadas'])}  Actualizadas: {len(detalle['actualizadas'])}  Eliminadas: {len(detalle['eliminadas'])}  Omitidas: {len(detalle['omitidas'])}")
+    print(f"Fragmentos embebidos en esta pasada: {detalle['fragmentos']}")
+    print(f"Total persistido en {DIRECTORIO_VECTORSTORE}/: {resumen['fragmentos']} fragmentos")
     print(f"Metadatos de la colección: {resumen['metadatos']}")
     return 0
 

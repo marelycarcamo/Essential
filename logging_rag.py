@@ -217,6 +217,60 @@ def filtrar_documentos_sospechosos(
     return limpios, descartados
 
 
+def responder_con_documentos(
+    pregunta: str,
+    documentos_recuperados: list[Document],
+    modelo,
+    auditoria: list[dict],
+    huella_prompt: str | None = None,
+) -> dict:
+    """Responde a partir de documentos ya recuperados, dentro de una traza abierta.
+
+    Asume que quien llama ya fijó el ``trace_id`` y ya registró la consulta. Está
+    separada de ``procesar_consulta`` para que el servicio completo pueda
+    registrar la recuperación **antes** de esta etapa y compartir el mismo
+    ``trace_id``: si cada capa abriera su propia traza, una consulta aparecería
+    partida en dos, y la auditoría dejaría de poder leerse de corrido.
+    """
+
+    limpios, descartados = filtrar_documentos_sospechosos(documentos_recuperados, auditoria)
+    evento(
+        auditoria,
+        "contexto_filtrado",
+        n_recuperados=len(documentos_recuperados),
+        n_limpios=len(limpios),
+        n_descartados=len(descartados),
+    )
+
+    if not limpios:
+        evento(
+            auditoria,
+            "sin_contexto_confiable",
+            n_recuperados=len(documentos_recuperados),
+            n_descartados=len(descartados),
+        )
+        return {
+            "trace_id": trace_id_var.get(),
+            "respuesta": RESPUESTA_SIN_CONTEXTO,
+            "fuentes": [],
+            "auditoria": auditoria,
+        }
+
+    contexto, citas = formatear_contexto(limpios)
+    prompt = PLANTILLA_PROMPT.format(contexto=contexto, pregunta=pregunta.strip())
+
+    respuesta = modelo.invoke(prompt)
+    registrar_consumo(respuesta, auditoria, huella_prompt)
+    texto = respuesta.content if isinstance(respuesta.content, str) else str(respuesta.content)
+
+    return {
+        "trace_id": trace_id_var.get(),
+        "respuesta": texto,
+        "fuentes": sorted(set(citas.values())),
+        "auditoria": auditoria,
+    }
+
+
 def procesar_consulta(
     pregunta: str,
     documentos_recuperados: list[Document],
@@ -244,43 +298,9 @@ def procesar_consulta(
             pregunta_len=len(pregunta),
             pregunta_huella=huella(pregunta),
         )
-
-        limpios, descartados = filtrar_documentos_sospechosos(documentos_recuperados, auditoria)
-        evento(
-            auditoria,
-            "contexto_filtrado",
-            n_recuperados=len(documentos_recuperados),
-            n_limpios=len(limpios),
-            n_descartados=len(descartados),
+        return responder_con_documentos(
+            pregunta, documentos_recuperados, modelo, auditoria, huella_prompt
         )
-
-        if not limpios:
-            evento(
-                auditoria,
-                "sin_contexto_confiable",
-                n_recuperados=len(documentos_recuperados),
-                n_descartados=len(descartados),
-            )
-            return {
-                "trace_id": trace_id_var.get(),
-                "respuesta": RESPUESTA_SIN_CONTEXTO,
-                "fuentes": [],
-                "auditoria": auditoria,
-            }
-
-        contexto, citas = formatear_contexto(limpios)
-        prompt = PLANTILLA_PROMPT.format(contexto=contexto, pregunta=pregunta.strip())
-
-        respuesta = modelo.invoke(prompt)
-        registrar_consumo(respuesta, auditoria, huella_prompt)
-        texto = respuesta.content if isinstance(respuesta.content, str) else str(respuesta.content)
-
-        return {
-            "trace_id": trace_id_var.get(),
-            "respuesta": texto,
-            "fuentes": sorted(set(citas.values())),
-            "auditoria": auditoria,
-        }
     finally:
         # Sin este reset, la siguiente consulta del mismo proceso heredaría el
         # trace_id de esta y las dos trazas quedarían indistinguibles.

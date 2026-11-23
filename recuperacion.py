@@ -45,6 +45,12 @@ import indexar_corpus as ic
 
 logger = logging.getLogger(__name__)
 
+# El texto del prompt vive en ``registro_prompts.py``, que es su historial. Acá se
+# importa la versión activa y no se copia: un prompt duplicado en dos archivos se
+# desincroniza, y entonces la huella que registra la respuesta deja de identificar
+# el texto que se envió de verdad.
+from registro_prompts import PROMPT_ACTIVO as PLANTILLA_PROMPT  # noqa: E402
+
 # Una cita es un número entre corchetes. Se expresa como patrón y no como un
 # recorrido carácter por carácter porque el recorrido se rompe con un corchete
 # de cierre suelto, y ese error no avisa.
@@ -57,27 +63,16 @@ PATRON_CITA = re.compile(r"\[(\d+)\]")
 # trade-off con precisión y recall en lugar de confiarlo a la intuición.
 K_POR_DEFECTO = 3
 
-# La respuesta no puede salir del contexto, y cuando el contexto no alcanza debe
-# decirlo. Las dos instrucciones están juntas porque una sola no alcanza: "cita
-# tus fuentes" sin "admite cuando no sabes" produce citas inventadas.
-PLANTILLA_PROMPT = """Responde la pregunta usando SOLO el contexto de abajo.
-Cita la fuente de cada afirmación con su número entre corchetes, como [1].
-Si el contexto no alcanza para responder, dilo explícitamente en vez de inventar.
-
-Contexto:
-{contexto}
-
-Pregunta: {pregunta}
-
-Respuesta:"""
-
-
 class ErrorConsulta(ValueError):
     """La pregunta no es válida o el índice no se puede consultar."""
 
 
 def formatear_contexto(fragmentos: list[Document]) -> tuple[str, dict[int, str]]:
     """Numera los fragmentos y arma el mapa de citas.
+
+    Cada bloque incluye **el archivo de origen** además del texto. Sin el nombre en
+    el contexto, el modelo puede numerar sus citas pero no puede nombrar la fuente,
+    y una cita que el lector no puede ir a verificar no sirve de nada.
 
     Args:
         fragmentos: fragmentos recuperados, en el orden en que los devolvió el
@@ -93,7 +88,7 @@ def formatear_contexto(fragmentos: list[Document]) -> tuple[str, dict[int, str]]
 
     for numero, fragmento in enumerate(fragmentos, start=1):
         fuente = fragmento.metadata.get("fuente", "desconocida")
-        lineas.append(f"[{numero}] {fragmento.page_content.strip()}")
+        lineas.append(f"[{numero}] ({fuente}) {fragmento.page_content.strip()}")
         citas[numero] = fuente
 
     return "\n\n".join(lineas), citas

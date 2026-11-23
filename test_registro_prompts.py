@@ -21,6 +21,7 @@ from registro_prompts import (
     PROMPT_ACTIVO,
     PROMPT_V1,
     PROMPT_V2,
+    PROMPT_V3,
     RegistroDePrompts,
     diff_prompts,
     huella_prompt,
@@ -111,14 +112,14 @@ def test_registrar_versiones_historicas_es_idempotente():
     primera = registrar_versiones_historicas()
     segunda = registrar_versiones_historicas(primera)
 
-    assert len(primera.versiones) == 2
-    assert len(segunda.versiones) == 2
+    assert len(primera.versiones) == 3
+    assert len(segunda.versiones) == 3
 
 
-def test_el_historial_tiene_dos_huellas_distintas():
+def test_el_historial_tiene_tres_huellas_distintas():
     registro = registrar_versiones_historicas()
 
-    assert len(set(registro.huellas(NOMBRE_PROMPT))) == 2
+    assert len(set(registro.huellas(NOMBRE_PROMPT))) == 3
 
 
 def test_la_version_activa_es_la_ultima_registrada():
@@ -128,17 +129,22 @@ def test_la_version_activa_es_la_ultima_registrada():
 
 
 def test_la_version_activa_declara_el_contexto_como_no_ejecutable():
-    assert PROMPT_ACTIVO == PROMPT_V2
+    assert PROMPT_ACTIVO == PROMPT_V3
     assert "no instrucciones" in PROMPT_ACTIVO
     assert "no instrucciones" not in PROMPT_V1
 
 
 def test_ambas_versiones_mantienen_las_garantias_del_bloque_26():
-    for version in (PROMPT_V1, PROMPT_V2):
+    for version in (PROMPT_V1, PROMPT_V2, PROMPT_V3):
         assert "SOLO el contexto" in version
         assert "dilo explícitamente" in version
         assert "{contexto}" in version
         assert "{pregunta}" in version
+
+
+def test_la_version_3_pide_el_nombre_del_archivo():
+    assert "nombre del archivo" in PROMPT_V3
+    assert "nombre del archivo" not in PROMPT_V2
 
 
 # --- Diff ------------------------------------------------------------------
