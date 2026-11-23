@@ -24,6 +24,10 @@ El proyecto busca evaluar tanto el funcionamiento de los prompts como la consist
 - **Python:** lenguaje de programación.
 - **OpenRouter:** servicio de acceso a modelos de inteligencia artificial.
 - **OpenAI GPT-4o mini:** modelo configurado por defecto.
+- **DeepSeek:** proveedor principal del cliente modular (`deepseek-flash`).
+- **Gemini:** proveedor de respaldo del cliente y proveedor de **embeddings** (`models/gemini-embedding-001`), porque DeepSeek no ofrece ese endpoint.
+- **Chroma:** base de datos vectorial que persiste el índice del corpus documental en disco.
+- **LangChain:** orquestación de cadenas, agente con herramientas y recuperación.
 - **Requests:** envío de solicitudes HTTP.
 - **python-dotenv:** carga de variables de entorno.
 - **JSON Schema:** definición de las estructuras esperadas para las respuestas.
@@ -60,6 +64,13 @@ Cada recomendación incluye una dimensión, una acción y un nivel de prioridad:
 
 ```text
 Essential/
+├── corpus/
+│   ├── 01_cliente_modular.md
+│   ├── 02_costos.md
+│   ├── 03_banco_prompts.md
+│   ├── 04_agente_herramientas.md
+│   ├── 05_pruebas.md
+│   └── 06_busqueda_pipeline.md
 ├── docs/
 │   ├── decision-arquitectura.md
 │   ├── Diagrama de flujo para consumir OpenRouter.png
@@ -103,14 +114,17 @@ Essential/
 ├── experimentos/
 │   ├── ensayo_rate_limit.py
 │   ├── medir_metricas.py
-│   └── medir_pipeline.py
+│   ├── medir_pipeline.py
+│   └── verificar_indice.py
 ├── .env.example
 ├── .gitignore
+├── indexar_corpus.py
 ├── main.py
 ├── pytest.ini
 ├── README.md
 ├── requirements.txt
-└── revision_manual.py
+├── revision_manual.py
+└── test_indexar_corpus.py
 
 ```
 
@@ -140,6 +154,10 @@ Essential/
 | `docs/limites_metrica.md` | Documento de límites de la métrica: qué mide, modos de falla con un ejemplo concreto de cada uno, muestra revisada y recomendación de uso. |
 | `experimentos/medir_pipeline.py` | Genera tres respuestas reales con el cliente y calcula la coincidencia contra una referencia escrita a mano, sobre texto crudo y sobre texto procesado. |
 | `docs/registro_pipeline_texto.txt` | Registro de esa corrida: consulta, referencia, respuesta, las dos proporciones y el costo acumulado. |
+| `corpus/` | Corpus documental del proyecto en seis documentos cortos: cliente, costos, banco de prompts, agente, pruebas y búsqueda. Es la fuente que se indexa para la recuperación semántica, y cada fragmento conserva el nombre del archivo del que salió para poder citarlo. |
+| `indexar_corpus.py` | Lee `corpus/`, lo parte en fragmentos y guarda el índice con embeddings reales en `vectorstore/`. Verifica la integridad de los fragmentos antes de gastar llamadas y deja registrado el modelo con el que se construyó el índice. |
+| `experimentos/verificar_indice.py` | Se reconecta al índice desde un proceso nuevo, comprueba el conteo y la metadata de la colección, y hace tres búsquedas por significado para evidenciar que el salto semántico funciona. |
+| `test_indexar_corpus.py` | Pruebas de la indexación con embeddings falsos: carga, partición, ids, integridad y persistencia real en un directorio temporal, sin red ni cuota. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -296,6 +314,16 @@ python experimentos/medir_metricas.py
 ```
 
 Genera una respuesta por consulta, calcula las tres métricas y guarda `docs/resultados_metricas.json` **con la respuesta incluida**, para poder releer los casos bajos sin regenerarlos. Consume una llamada al proveedor por cada caso.
+
+### 8.7. Indexar el corpus documental
+
+```bash
+python indexar_corpus.py
+```
+
+Lee los seis documentos de `corpus/`, los parte en fragmentos, calcula un embedding real por fragmento y los persiste en `vectorstore/`. Deja impreso el número de documentos, el de fragmentos y la metadata de la colección. Se corre **una vez**, o cada vez que cambie el corpus: la recuperación se reconecta al índice y no vuelve a calcular embeddings.
+
+`vectorstore/` está en `.gitignore` porque es contenido generado y se puede reconstruir con este comando. Para comprobar que el índice quedó bien, `python experimentos/verificar_indice.py`.
 
 ## 9. Pruebas y validación
 
@@ -491,6 +519,32 @@ La corrida se extendió a **20 consultas** y se revisaron **10 a mano**: los 5 c
 
 Todo quedó documentado en `docs/limites_metrica.md`, con la rúbrica aplicada caso por caso en `revision_manual.py` y `docs/revision_manual.json`.
 
+### 9.10. Verificación del índice vectorial (Bloque 24)
+
+El corpus son **6 documentos** del proyecto, partidos en **34 fragmentos** con `chunk_size=400` y `chunk_overlap=60`. La partición se decidió con una medición previa: el splitter corta en párrafos, así que bajar el tamaño a 200 duplica los fragmentos (85) sin ganar precisión, y subirlo a 600 mezcla temas distintos dentro del mismo fragmento.
+
+La prueba de que el índice **persistió** no es que el script de indexación termine sin error, sino que un proceso distinto se reconecte al mismo directorio y cuente lo mismo:
+
+```bash
+python experimentos/verificar_indice.py
+```
+
+| Comprobación | Resultado |
+|---|---|
+| Fragmentos en disco (proceso nuevo) | 34 |
+| Modelo registrado en la colección | `models/gemini-embedding-001` |
+| Llamadas de embedding al indexar | 1 (un solo lote) |
+
+**Búsqueda por significado**, con preguntas que no comparten palabras con el documento que deberían encontrar:
+
+| Pregunta | Primer resultado | Distancia |
+|---|---|---:|
+| ¿Qué pasa si el proveedor se cae y la llamada falla varias veces? | `01_cliente_modular.md` → *Backoff exponencial* | 0,661 |
+| ¿Cuánto cuesta cada llamada al modelo? | `02_costos.md` → *Costo por operación* | 0,572 |
+| ¿Cómo se comprueba que el código funciona antes de publicarlo? | `05_pruebas.md` → *Trazabilidad* | 0,590 |
+
+La primera consulta **no** trae como primer resultado el fragmento de backoff, sino uno de pruebas: es un caso real de recuperación imperfecta y queda anotado para el conjunto de evaluación del Bloque 27, donde se mide en lugar de mirarse a ojo.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -575,6 +629,18 @@ Todo quedó documentado en `docs/limites_metrica.md`, con la rúbrica aplicada c
 - **Cobertura:** cuatro pruebas por proveedor: la subclase en 429, los 5xx sin confundirse con el límite, y la compatibilidad con `except ErrorTemporal` y `except TimeoutError`.
 - **Deuda pendiente:** respetar el encabezado `Retry-After` cuando el proveedor lo envíe, en lugar de la espera calculada por el backoff. Queda anotado en la sección 11.
 
+##### Bloque 24: Indexación del corpus con chunking, embeddings y persistencia en Chroma
+
+- **Objetivo:** juntar las dos piezas del bloque —partir texto en fragmentos y calcular embeddings reales— sobre un corpus propio, y dejar el índice persistido en disco para que la recuperación lo consulte sin recalcular nada.
+- **Implementación:** `corpus/` con **seis documentos** del proyecto (cliente modular, costos, banco de prompts, agente, pruebas y búsqueda/pipeline). `indexar_corpus.py` con `cargar_documentos`, `partir_documentos`, `construir_ids`, `verificar_fragmentos`, `indexar_corpus`, `abrir_indice` y `verificar_indice`. Persistencia en `vectorstore/` con Chroma y embeddings de `models/gemini-embedding-001`.
+- **Decisión (proveedor de embeddings):** DeepSeek no ofrece endpoint de embeddings, así que Gemini deja de ser solo el respaldo de generación y pasa a ser el proveedor de embeddings del proyecto. El flujo RAG queda con dos dependencias de proveedor a la vez, y eso está declarado en la sección 11.
+- **Decisión (parámetros de partición):** 400 caracteres con 60 de solapamiento, elegidos midiendo. Con 200 el corpus daba 85 fragmentos —el splitter corta en párrafos, así que el límite real lo ponen los saltos de línea— y con 600 algunos fragmentos mezclaban dos temas. Con 400/60 quedan 34 fragmentos, casi todos de un párrafo completo, y el solapamiento solo actúa cuando un párrafo se parte.
+- **Decisión (metadata e ids desde el primer indexado):** el material agrega `metadata` e `ids` en el Bloque 26 y obliga a reindexar. Se hicieron ahora, por dos razones: `fuente` no se puede agregar retroactivamente sin volver a pagar los embeddings, y los ids predecibles (`archivo.md#3`) son lo que permite etiquetar a mano el conjunto de evaluación del Bloque 27 sin depender del orden interno de Chroma.
+- **Decisión (modelo declarado en la colección):** el índice guarda en su metadata el modelo de embeddings, el tamaño de chunk y el solapamiento. Un índice vectorial no dice con qué modelo se construyó: cambiar de modelo sin reindexar no falla, y si la dimensión coincide devuelve fragmentos sin relación con la pregunta mientras el sistema parece funcionar. `verificar_indice` compara el modelo guardado con el configurado y corta si no coincide.
+- **Hallazgo (log engañoso):** la primera corrida imprimió `Indexando 34 fragmentos con modelo sin declarar` aunque sí lo declaraba, porque el mensaje leía el parámetro opcional antes de aplicar el valor por defecto. Corregido antes del commit; el dato importa porque es el que se mira para saber con qué se construyó el índice.
+- **Hallazgo (verificación de integridad):** los fragmentos se revisan **antes** de llamar a la API —vacíos, sin `fuente` y con texto repetido—, porque descubrir un fragmento vacío después de indexar obliga a reindexar y a pagar de nuevo. Un fragmento duplicado no lanza ningún error: ocupa dos lugares entre los candidatos y desplaza contenido que sí aporta.
+- **Evidencia:** 21 pruebas nuevas con embeddings falsos, incluida la persistencia real en un directorio temporal y la reconexión sin volver a embeber (288 en total). Corrida real: 6 documentos, 34 fragmentos, **una sola llamada de embedding** en lote, y reconexión desde otro proceso con el conteo y la metadata correctos (sección 9.10).
+
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
 - Ampliar el conjunto de comentarios de prueba.
@@ -588,6 +654,9 @@ Entre las posibles mejoras se encuentran:
 - Respetar el encabezado `Retry-After` del proveedor cuando responde 429, en lugar de la espera calculada por el backoff.
 - Modelar los feriados del proveedor al calcular la tarifa de hora punta.
 - Registrar el costo en un archivo o base de datos para conservarlo entre ejecuciones.
+- **Dependencia de dos proveedores en el flujo RAG:** la generación usa DeepSeek y los embeddings usan Gemini, porque DeepSeek no ofrece embeddings. Si Gemini no responde, la recuperación no funciona aunque la generación sí: es una dependencia que hay que declarar y, más adelante, decidir si se mitiga con embeddings locales.
+- **El índice no se versiona y hay que reindexar cuando cambia el corpus:** `vectorstore/` está en `.gitignore` por ser contenido reconstructible. La contrapartida es que un clon nuevo del repositorio no trae índice y, si se edita `corpus/`, el índice queda desactualizado hasta correr `python indexar_corpus.py`.
+- **El corpus es una foto de la documentación, no la documentación:** los seis documentos de `corpus/` están escritos a mano y hay que mantenerlos sincronizados con el código. Un cambio en `src/costos.py` que no se refleje en `corpus/02_costos.md` produce respuestas correctas sobre un sistema que ya no existe.
 
 ## 12. Conclusión
 
