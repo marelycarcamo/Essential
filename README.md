@@ -121,10 +121,12 @@ Essential/
 ├── indexar_corpus.py
 ├── main.py
 ├── pytest.ini
+├── recuperacion.py
 ├── README.md
 ├── requirements.txt
 ├── revision_manual.py
-└── test_indexar_corpus.py
+├── test_indexar_corpus.py
+└── test_recuperacion.py
 
 ```
 
@@ -158,6 +160,8 @@ Essential/
 | `indexar_corpus.py` | Lee `corpus/`, lo parte en fragmentos y guarda el índice con embeddings reales en `vectorstore/`. Verifica la integridad de los fragmentos antes de gastar llamadas y deja registrado el modelo con el que se construyó el índice. |
 | `experimentos/verificar_indice.py` | Se reconecta al índice desde un proceso nuevo, comprueba el conteo y la metadata de la colección, y hace tres búsquedas por significado para evidenciar que el salto semántico funciona. |
 | `test_indexar_corpus.py` | Pruebas de la indexación con embeddings falsos: carga, partición, ids, integridad y persistencia real en un directorio temporal, sin red ni cuota. |
+| `recuperacion.py` | Recupera por significado los fragmentos más parecidos a una pregunta, los numera y arma el prompt que obliga a citar la fuente. Devuelve el mapa de citas y los problemas detectados en ellas. |
+| `test_recuperacion.py` | Pruebas de la recuperación con un índice real en directorio temporal y un modelo de generación doble: numeración, `k`, validación de la pregunta y detección de citas inventadas. |
 | `prompts/banco.py` | Define los prompts y sus esquemas para las pruebas de consistencia. |
 | `prompts/test_consistencia.py` | Ejecuta los prompts varias veces, valida las respuestas y registra los resultados. |
 | `prompts/registro_resultados.json` | Almacena los resultados de la última ejecución de las pruebas de consistencia. |
@@ -324,6 +328,14 @@ python indexar_corpus.py
 Lee los seis documentos de `corpus/`, los parte en fragmentos, calcula un embedding real por fragmento y los persiste en `vectorstore/`. Deja impreso el número de documentos, el de fragmentos y la metadata de la colección. Se corre **una vez**, o cada vez que cambie el corpus: la recuperación se reconecta al índice y no vuelve a calcular embeddings.
 
 `vectorstore/` está en `.gitignore` porque es contenido generado y se puede reconstruir con este comando. Para comprobar que el índice quedó bien, `python experimentos/verificar_indice.py`.
+
+### 8.8. Consultar el flujo de recuperación
+
+```bash
+python recuperacion.py "¿qué pasa si la llamada al proveedor falla varias veces?"
+```
+
+Recupera los tres fragmentos más parecidos por significado, arma el prompt con el contexto numerado, genera la respuesta y muestra el mapa de citas. Requiere el índice creado con el comando anterior.
 
 ## 9. Pruebas y validación
 
@@ -545,6 +557,25 @@ python experimentos/verificar_indice.py
 
 La primera consulta **no** trae como primer resultado el fragmento de backoff, sino uno de pruebas: es un caso real de recuperación imperfecta y queda anotado para el conjunto de evaluación del Bloque 27, donde se mide en lugar de mirarse a ojo.
 
+### 9.11. Verificación del flujo de recuperación con citas (Bloque 26)
+
+Dos corridas reales contra el índice de 34 fragmentos, con generación en DeepSeek:
+
+**Pregunta respondible** — *¿Qué pasa si la llamada al proveedor falla varias veces?*
+
+| Aspecto | Resultado |
+|---|---|
+| Fragmentos recuperados | 3 (uno de pruebas, dos de cliente modular) |
+| Citas en la respuesta | `[3]` para los reintentos y la espera creciente, `[2]` para el backoff |
+| Citas contra el mapa | las dos existen y apuntan al archivo correcto |
+| Límite admitido | agregó que el contexto no dice cuántos reintentos hay ni qué pasa al agotarlos |
+
+**Pregunta imposible** — *¿Cuál es el precio del dólar hoy en Chile?*
+
+La respuesta fue: el contexto no incluye esa información y no puede responder con las fuentes dadas, citando los tres fragmentos que revisó. No inventó una cifra. Es la verificación que importa: un sistema que siempre responde algo no distingue entre saber y no saber.
+
+**Trazabilidad de una cita, verificada a mano:** `[3]` apuntaba a `01_cliente_modular.md#0`, y ese fragmento efectivamente describe `con_reintento()` como función interna. La cita es correcta, no decorativa.
+
 ## 10. Registro del desarrollo y ensayo de instalación limpia
 
 - **Fecha:** 2026-10-23
@@ -640,6 +671,18 @@ La primera consulta **no** trae como primer resultado el fragmento de backoff, s
 - **Hallazgo (log engañoso):** la primera corrida imprimió `Indexando 34 fragmentos con modelo sin declarar` aunque sí lo declaraba, porque el mensaje leía el parámetro opcional antes de aplicar el valor por defecto. Corregido antes del commit; el dato importa porque es el que se mira para saber con qué se construyó el índice.
 - **Hallazgo (verificación de integridad):** los fragmentos se revisan **antes** de llamar a la API —vacíos, sin `fuente` y con texto repetido—, porque descubrir un fragmento vacío después de indexar obliga a reindexar y a pagar de nuevo. Un fragmento duplicado no lanza ningún error: ocupa dos lugares entre los candidatos y desplaza contenido que sí aporta.
 - **Evidencia:** 21 pruebas nuevas con embeddings falsos, incluida la persistencia real en un directorio temporal y la reconexión sin volver a embeber (288 en total). Corrida real: 6 documentos, 34 fragmentos, **una sola llamada de embedding** en lote, y reconexión desde otro proceso con el conteo y la metadata correctos (sección 9.10).
+
+##### Bloque 26: Recuperación semántica y prompt dinámico con citas
+
+- **Objetivo:** pasar de la búsqueda por palabra clave de `src/herramientas.py` a una búsqueda por significado, y armar con los fragmentos un prompt que obligue al modelo a citar de dónde sale cada afirmación.
+- **Implementación:** `recuperacion.py` con `formatear_contexto`, `recuperar`, `construir_prompt`, `responder`, `citas_usadas` y `verificar_citas`. Se reconecta al índice con `abrir_indice` en vez de reindexar, y reutiliza `verificar_indice` para cortar si el índice se construyó con otro modelo de embeddings.
+- **Decisión (k=3):** con 34 fragmentos de un párrafo, tres cubren la pregunta y su contexto inmediato. Más fragmentos diluyen la atención del modelo sobre los que importan; menos pierden el contexto que la cita necesita. El valor queda como constante configurable y el Bloque 27 mide el trade-off en lugar de confiarlo a la intuición.
+- **Decisión (las dos instrucciones juntas):** el prompt pide citar y, en la misma frase, admitir cuando el contexto no alcanza. "Cita tus fuentes" sin "admite cuando no sabes" produce citas inventadas para llenar el hueco.
+- **Decisión (verificar citas sin bloquear):** `verificar_citas` compara los números citados con el mapa real y devuelve problemas, pero no corta la respuesta. Bloquear obligaría a reintentar una llamada ya pagada; informar deja el problema visible en la traza, que es donde se revisa.
+- **Hallazgo (verificación en dos direcciones):** además de comprobar que la respuesta correcta cita bien, se probó con una pregunta **imposible** («¿cuál es el precio del dólar hoy en Chile?»). El modelo respondió que el contexto no alcanza y citó los tres fragmentos que revisó, sin inventar una cifra. Sin esa segunda prueba, un sistema que siempre responde algo parecería funcionar.
+- **Hallazgo (el patrón de cita se rompe con un recorrido manual):** la primera versión extraía las citas recorriendo carácter por carácter y acumulaba dígitos fuera de corchetes, así que un año suelto seguido de `]` se contaba como cita. Se reemplazó por un patrón regular, y quedó una prueba con `1991` entre paréntesis para que no vuelva.
+- **Diferencia con el material:** el material reindexa en este bloque para agregar `metadata` e `ids`. Como se agregaron en el Bloque 24, aquí no hubo reindexación ni un segundo pago de embeddings; solo se verificó que el índice existente sirviera.
+- **Evidencia:** 22 pruebas nuevas (310 en total) y las dos corridas reales de la sección 9.11, con el mapa de citas y la verificación manual de una cita.
 
 ## 11. Limitaciones y mejoras futuras
 Entre las posibles mejoras se encuentran:
